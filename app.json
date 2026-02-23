@@ -1,0 +1,52 @@
+{
+  "expo": {
+    "name": "Splitwise",
+    "slug": "splitwise",
+    "version": "1.0.0",
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "scheme": "splitwise",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1CC29F"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.splitwise.app"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1CC29F"
+      },
+      "package": "com.splitwise.app"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-sqlite",
+      "expo-secure-store",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Splitwise to access your camera for receipt scanning."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Splitwise to access your photos for receipt scanning."
+        }
+      ],
+      "expo-web-browser"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
