@@ -1,139 +1,58 @@
 import React, { useEffect, useState } from 'react';
 import { Tabs, Redirect } from 'expo-router';
-import {
-  Platform, useWindowDimensions,
-  View, Text, StyleSheet, ActivityIndicator,
-} from 'react-native';
+import { Platform, useWindowDimensions } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useMaintenanceStore } from '@/stores/useMaintenanceStore';
 import { useThemeColors } from '@/utils/hooks';
-
-function MaintenanceScreen() {
-  const maintenance = useMaintenanceStore();
-
-  const formatTimeRemaining = (): string | null => {
-    if (!maintenance.scheduledEnd) return null;
-    const end = new Date(maintenance.scheduledEnd).getTime();
-    const diff = end - Date.now();
-    if (diff <= 0) return null;
-    const hours = Math.floor(diff / 3600000);
-    const mins = Math.floor((diff % 3600000) / 60000);
-    if (hours > 0) return `Estimated time: ${hours}h ${mins}m`;
-    return `Estimated time: ${mins} minutes`;
-  };
-
-  const timeRemaining = formatTimeRemaining();
-
-  return (
-    <View style={maintStyles.container}>
-      <View style={maintStyles.iconWrap}>
-        <MaterialIcons name="build-circle" size={64} color="#FDCB6E" />
-      </View>
-      <Text style={maintStyles.title}>Under Maintenance</Text>
-      <Text style={maintStyles.message}>{maintenance.message}</Text>
-      {timeRemaining && (
-        <View style={maintStyles.timeBadge}>
-          <MaterialIcons name="schedule" size={16} color="#FDCB6E" />
-          <Text style={maintStyles.timeText}>{timeRemaining}</Text>
-        </View>
-      )}
-      <ActivityIndicator size="small" color="#5BC5A7" style={{ marginTop: 30 }} />
-      <Text style={maintStyles.waitText}>Checking status...</Text>
-    </View>
-  );
-}
-
-const maintStyles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0f0f1a',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 32,
-  },
-  iconWrap: {
-    width: 100,
-    height: 100,
-    borderRadius: 24,
-    backgroundColor: 'rgba(253, 203, 110, 0.1)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 24,
-  },
-  title: {
-    color: '#FFF',
-    fontSize: 28,
-    fontWeight: '800',
-    marginBottom: 12,
-    letterSpacing: -0.5,
-  },
-  message: {
-    color: '#8892b0',
-    fontSize: 16,
-    textAlign: 'center',
-    lineHeight: 24,
-    maxWidth: 400,
-  },
-  timeBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 20,
-    backgroundColor: 'rgba(253, 203, 110, 0.1)',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(253, 203, 110, 0.2)',
-  },
-  timeText: {
-    color: '#FDCB6E',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  waitText: {
-    color: '#555',
-    fontSize: 12,
-    marginTop: 8,
-  },
-});
+import { useKeyboardShortcuts } from '@/utils/useKeyboardShortcuts';
+import { MaintenanceScreen } from '@/components/MaintenanceScreen';
 
 export default function TabLayout() {
+  useKeyboardShortcuts();
   const theme = useThemeColors();
-  const { isAuthenticated, isLoading } = useAuthStore();
+  const { isAuthenticated, isLoading, needsEmailVerification, user } = useAuthStore();
   const maintenance = useMaintenanceStore();
   const { width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const [maintenanceLoaded, setMaintenanceLoaded] = useState(false);
 
   useEffect(() => {
-    maintenance.load().then(() => setMaintenanceLoaded(true));
-
-    const interval = setInterval(() => {
-      maintenance.load();
-    }, 10000);
-    return () => clearInterval(interval);
+    let cancelled = false;
+    maintenance.load().then(() => {
+      if (!cancelled) setMaintenanceLoaded(true);
+    });
+    const unsubscribe = maintenance.subscribe();
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
   }, []);
 
   if (isLoading || !maintenanceLoaded) return null;
   if (!isAuthenticated) return <Redirect href="/(auth)/login" />;
+  if (needsEmailVerification) return <Redirect href="/(auth)/verify-email" />;
 
-  if (maintenance.isActive) {
+  // Show maintenance screen for regular users only; admins can still use the app while it's active.
+  if (maintenance.isActive && ((user?.role ?? 'user') !== 'admin')) {
     return <MaintenanceScreen />;
   }
 
   const isTablet = width >= 768;
 
+  const tabBarBaseHeight = 56;
+
   const tabBarHeight = Platform.select({
-    ios: 88,
-    android: 64,
+    ios: tabBarBaseHeight + insets.bottom,
+    android: tabBarBaseHeight + insets.bottom,
     web: 60,
     default: 64,
   });
 
   const tabBarPaddingBottom = Platform.select({
-    ios: 28,
-    android: 8,
+    ios: insets.bottom || 16,
+    android: insets.bottom || 12,
     web: 8,
     default: 8,
   });
@@ -176,9 +95,10 @@ export default function TabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Dashboard',
+          title: 'Friends',
+          headerShown: false,
           tabBarIcon: ({ color, size }) => (
-            <MaterialIcons name="dashboard" size={size} color={color} />
+            <MaterialIcons name="people-outline" size={size} color={color} />
           ),
         }}
       />
@@ -186,6 +106,7 @@ export default function TabLayout() {
         name="groups"
         options={{
           title: 'Groups',
+          headerShown: false,
           tabBarIcon: ({ color, size }) => (
             <MaterialIcons name="group" size={size} color={color} />
           ),
@@ -195,6 +116,7 @@ export default function TabLayout() {
         name="activity"
         options={{
           title: 'Activity',
+          headerShown: false,
           tabBarIcon: ({ color, size }) => (
             <MaterialIcons name="notifications" size={size} color={color} />
           ),

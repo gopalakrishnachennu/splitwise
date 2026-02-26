@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Splitwise – Password reset complete</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      :root {
+        --bg: #0f172a;
+        --card-bg: #020617;
+        --accent: #1cc29f;
+        --accent-soft: rgba(28, 194, 159, 0.12);
+        --text: #e5e7eb;
+        --text-muted: #9ca3af;
+        --border: rgba(148, 163, 184, 0.25);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+        background: radial-gradient(circle at 0 0, #1e293b 0, #020617 50%, #000 100%);
+        color: var(--text);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+      }
+
+      .card {
+        width: 100%;
+        max-width: 440px;
+        background: radial-gradient(circle at top left, rgba(28, 194, 159, 0.08), transparent 55%),
+          radial-gradient(circle at bottom right, rgba(56, 189, 248, 0.06), transparent 60%),
+          var(--card-bg);
+        border-radius: 24px;
+        border: 1px solid var(--border);
+        box-shadow:
+          0 18px 60px rgba(15, 23, 42, 0.95),
+          0 0 0 1px rgba(148, 163, 184, 0.15);
+        padding: 28px 28px 24px;
+        position: relative;
+        overflow: hidden;
+      }
+
+      .glow {
+        position: absolute;
+        inset: -40%;
+        opacity: 0.12;
+        background: radial-gradient(circle at 10% 0, #22c55e 0, transparent 55%),
+          radial-gradient(circle at 90% 100%, #22d3ee 0, transparent 55%);
+        pointer-events: none;
+        mix-blend-mode: screen;
+      }
+
+      .header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 20px;
+        position: relative;
+        z-index: 1;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .logo-mark {
+        width: 32px;
+        height: 32px;
+        border-radius: 10px;
+        background: conic-gradient(from 160deg, #22c55e, #22d3ee, #1cc29f, #22c55e);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #0b1120;
+        font-weight: 700;
+        font-size: 18px;
+        box-shadow:
+          0 10px 25px rgba(34, 197, 94, 0.35),
+          0 0 0 1px rgba(15, 23, 42, 0.7);
+      }
+
+      .brand-text {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+
+      .brand-name {
+        font-weight: 600;
+        letter-spacing: 0.03em;
+        font-size: 14px;
+      }
+
+      .brand-tagline {
+        font-size: 11px;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.16em;
+      }
+
+      .badge {
+        font-size: 11px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: rgba(15, 23, 42, 0.9);
+        border: 1px solid rgba(148, 163, 184, 0.4);
+        color: var(--text-muted);
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .badge-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 999px;
+        background: #22c55e;
+        box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.35);
+      }
+
+      h1 {
+        margin: 8px 0 6px;
+        font-size: 22px;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+      }
+
+      .subtitle {
+        margin: 0 0 18px;
+        font-size: 13px;
+        line-height: 1.5;
+        color: var(--text-muted);
+      }
+
+      .status-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 12px;
+        border-radius: 999px;
+        background: rgba(15, 23, 42, 0.95);
+        border: 1px solid rgba(34, 197, 94, 0.35);
+        margin-bottom: 18px;
+      }
+
+      .status-icon {
+        width: 18px;
+        height: 18px;
+        border-radius: 999px;
+        background: var(--accent-soft);
+        border: 1px solid rgba(34, 197, 94, 0.6);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 11px;
+        color: var(--accent);
+      }
+
+      .status-text {
+        font-size: 12px;
+      }
+
+      .actions {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        margin-bottom: 12px;
+      }
+
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 10px 14px;
+        border-radius: 999px;
+        border: 1px solid transparent;
+        font-size: 13px;
+        font-weight: 500;
+        text-decoration: none;
+        cursor: pointer;
+        transition:
+          background 0.15s ease,
+          color 0.15s ease,
+          transform 0.1s ease,
+          box-shadow 0.1s ease,
+          border-color 0.15s ease;
+      }
+
+      .btn-primary {
+        background: linear-gradient(135deg, #22c55e, #22d3ee);
+        color: #020617;
+        box-shadow:
+          0 10px 25px rgba(34, 197, 94, 0.45),
+          0 0 0 1px rgba(15, 23, 42, 0.9);
+      }
+
+      .btn-primary:hover {
+        transform: translateY(-1px);
+        box-shadow:
+          0 14px 32px rgba(34, 197, 94, 0.55),
+          0 0 0 1px rgba(15, 23, 42, 0.9);
+      }
+
+      .btn-secondary {
+        background: rgba(15, 23, 42, 0.96);
+        color: var(--text);
+        border-color: rgba(148, 163, 184, 0.5);
+      }
+
+      .btn-secondary:hover {
+        background: rgba(15, 23, 42, 1);
+        border-color: rgba(148, 163, 184, 0.9);
+      }
+
+      .footnote {
+        font-size: 11px;
+        color: var(--text-muted);
+        line-height: 1.5;
+      }
+
+      .footnote strong {
+        color: var(--text);
+        font-weight: 500;
+      }
+
+      @media (min-width: 480px) {
+        .card {
+          padding: 32px 32px 26px;
+        }
+
+        h1 {
+          font-size: 24px;
+        }
+      }
+    </style>
+    <script>
+      // If the user is on iOS Safari or in-app browser, gently try to open the Splitwise app.
+      window.addEventListener('load', function () {
+        var ua = navigator.userAgent || '';
+        var isIOS = /iPhone|iPad|iPod/.test(ua);
+        if (isIOS) {
+          setTimeout(function () {
+            try {
+              window.location.href = 'splitwise://login';
+            } catch (e) {
+              // ignore – the buttons below give manual options
+            }
+          }, 600);
+        }
+      });
+    </script>
+  </head>
+  <body>
+    <main class="card" aria-labelledby="title">
+      <div class="glow" aria-hidden="true"></div>
+      <header class="header">
+        <div class="brand">
+          <div class="logo-mark">S</div>
+          <div class="brand-text">
+            <div class="brand-name">Splitwise</div>
+            <div class="brand-tagline">Account security</div>
+          </div>
+        </div>
+        <div class="badge">
+          <span class="badge-dot"></span>
+          Secure reset
+        </div>
+      </header>
+
+      <h1 id="title">Your password has been updated</h1>
+      <p class="subtitle">
+        You’re all set. For your security, we’ve signed you out on all devices. Use your new password next time
+        you log in.
+      </p>
+
+      <div class="status-row" role="status">
+        <div class="status-icon">✓</div>
+        <div class="status-text">Reset request verified and applied successfully.</div>
+      </div>
+
+      <div class="actions">
+        <a class="btn btn-primary" href="splitwise://login">Open Splitwise app</a>
+        <a class="btn btn-secondary" href="https://splitx-27952.firebaseapp.com">
+          Back to Splitx project home
+        </a>
+      </div>
+
+      <p class="footnote">
+        <strong>On mobile?</strong> If the Splitwise app doesn’t open automatically, switch back to the app and sign
+        in with your new password.
+      </p>
+    </main>
+  </body>
+</html>
+

@@ -5,7 +5,8 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useThemeColors, useDeviceType, useDebounce } from '@/utils/hooks';
-import { AdminUser, getAdminUsers, deleteUserAdmin } from '@/services/admin';
+import { useAuthStore } from '@/stores/useAuthStore';
+import { AdminUser, getAdminUsers, deleteUserAdmin, setUserRole } from '@/services/admin';
 import { haptic } from '@/utils/haptics';
 import { Avatar } from '@/components/Avatar';
 
@@ -20,6 +21,7 @@ export default function AdminUsersScreen() {
   const debouncedSearch = useDebounce(search, 300);
 
   const isWide = deviceType !== 'phone';
+  const currentUser = useAuthStore((s) => s.user);
 
   const fetchUsers = useCallback(async () => {
     try {
@@ -52,11 +54,21 @@ export default function AdminUsersScreen() {
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
-            haptic.heavy();
-            await deleteUserAdmin(user.id);
-            setSelectedUser(null);
-            fetchUsers();
-            Alert.alert('Deleted', `User "${user.name}" has been permanently deleted.`);
+            try {
+              haptic.heavy();
+              await deleteUserAdmin(user.id, currentUser
+                ? { adminUserId: currentUser.id, adminUserName: currentUser.name, targetUserName: user.name }
+                : undefined);
+              setSelectedUser(null);
+              fetchUsers();
+              Alert.alert('Deleted', `User "${user.name}" has been permanently deleted.`);
+            } catch (err: any) {
+              console.error('Failed to delete user', err);
+              Alert.alert(
+                'Delete failed',
+                err?.message || 'Could not delete this user. Please check your admin permissions and try again.'
+              );
+            }
           },
         },
       ]
@@ -126,9 +138,52 @@ export default function AdminUsersScreen() {
       <View style={[styles.infoSection, { borderColor: colors.borderLight }]}>
         <Text style={[styles.infoTitle, { color: colors.textSecondary }]}>ACCOUNT DETAILS</Text>
         <InfoRow icon="badge" label="User ID" value={u.id.slice(0, 16) + '...'} colors={colors} />
+        <InfoRow icon="admin-panel-settings" label="Role" value={u.role === 'admin' ? 'Admin' : 'User'} colors={colors} />
         <InfoRow icon="attach-money" label="Currency" value={u.defaultCurrency} colors={colors} />
         <InfoRow icon="calendar-today" label="Joined" value={new Date(u.createdAt).toLocaleDateString()} colors={colors} />
       </View>
+
+      {currentUser && currentUser.id !== u.id && (
+        <TouchableOpacity
+          style={[styles.roleBtn, u.role === 'admin' ? { backgroundColor: '#FDCB6E18', borderColor: '#FDCB6E40' } : { backgroundColor: colors.primaryLight, borderColor: colors.primary }]}
+          onPress={async () => {
+            haptic.medium();
+            const newRole = u.role === 'admin' ? 'user' : 'admin';
+            Alert.alert(
+              newRole === 'admin' ? 'Make admin' : 'Remove admin',
+              newRole === 'admin'
+                ? `Grant "${u.name}" access to the admin panel?`
+                : `Remove admin access from "${u.name}"?`,
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: newRole === 'admin' ? 'Make admin' : 'Remove admin',
+                  onPress: async () => {
+                    try {
+                      await setUserRole(u.id, newRole, currentUser.id, currentUser.name, u.name);
+                      fetchUsers();
+                      setSelectedUser({ ...u, role: newRole });
+                      Alert.alert('Done', newRole === 'admin' ? `${u.name} is now an admin.` : `Admin access removed from ${u.name}.`);
+                    } catch (err: any) {
+                      console.error('Failed to update role', err);
+                      Alert.alert(
+                        'Update failed',
+                        err?.message || 'Could not update this user role. Please check your admin permissions and try again.'
+                      );
+                    }
+                  },
+                },
+              ]
+            );
+          }}
+          activeOpacity={0.7}
+        >
+          <MaterialIcons name="admin-panel-settings" size={18} color={u.role === 'admin' ? '#FDCB6E' : colors.primary} />
+          <Text style={[styles.roleBtnText, { color: u.role === 'admin' ? '#FDCB6E' : colors.primary }]}>
+            {u.role === 'admin' ? 'Remove admin access' : 'Make admin'}
+          </Text>
+        </TouchableOpacity>
+      )}
 
       <TouchableOpacity
         style={[styles.deleteBtn, { backgroundColor: '#E74C3C12', borderColor: '#E74C3C30' }]}
@@ -283,6 +338,17 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   infoTitle: { fontSize: 11, fontWeight: '600', letterSpacing: 0.8, marginBottom: 10 },
+  roleBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    gap: 8,
+    marginBottom: 12,
+  },
+  roleBtnText: { fontSize: 14, fontWeight: '600' },
   infoRow: {
     flexDirection: 'row',
     alignItems: 'center',

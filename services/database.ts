@@ -1,509 +1,616 @@
-import * as SQLite from 'expo-sqlite';
-import { v4 as uuidv4 } from 'uuid';
+import {
+  collection, doc, setDoc, getDoc, getDocs, deleteDoc,
+  query, where, orderBy, limit, updateDoc, addDoc,
+  Timestamp,
+} from 'firebase/firestore';
+import { db } from './firebase';
+import { getRate } from './fx';
 import {
   User, Friend, Group, GroupMember, Expense, ExpensePayer,
   ExpenseSplit, Activity, Settlement, SplitType, ExpenseCategory,
-  GroupType, Balance, DebtSimplification,
+  GroupType, Balance, DebtSimplification, RecurringInterval,
 } from '@/types';
 
-let db: SQLite.SQLiteDatabase;
-
-export const getDatabase = async (): Promise<SQLite.SQLiteDatabase> => {
-  if (!db) {
-    db = await SQLite.openDatabaseAsync('splitwise.db');
-    await initDatabase(db);
+const genId = (): string => {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let result = '';
+  for (let i = 0; i < 20; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
   }
-  return db;
-};
-
-const initDatabase = async (database: SQLite.SQLiteDatabase) => {
-  await database.execAsync(`
-    PRAGMA journal_mode = WAL;
-    PRAGMA foreign_keys = ON;
-
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      email TEXT UNIQUE NOT NULL,
-      name TEXT NOT NULL,
-      phone TEXT,
-      password_hash TEXT,
-      avatar_url TEXT,
-      default_currency TEXT DEFAULT 'USD',
-      created_at TEXT DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE IF NOT EXISTS friends (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      friend_id TEXT NOT NULL,
-      friend_name TEXT NOT NULL,
-      friend_email TEXT,
-      friend_phone TEXT,
-      friend_avatar_url TEXT,
-      balance REAL DEFAULT 0,
-      currency TEXT DEFAULT 'USD',
-      created_at TEXT DEFAULT (datetime('now')),
-      FOREIGN KEY (user_id) REFERENCES users(id)
-    );
-
-    CREATE TABLE IF NOT EXISTS groups_table (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      type TEXT DEFAULT 'other',
-      image_url TEXT,
-      simplify_debts INTEGER DEFAULT 0,
-      default_currency TEXT DEFAULT 'USD',
-      created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE IF NOT EXISTS group_members (
-      id TEXT PRIMARY KEY,
-      group_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      name TEXT NOT NULL,
-      email TEXT,
-      phone TEXT,
-      avatar_url TEXT,
-      FOREIGN KEY (group_id) REFERENCES groups_table(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS expenses (
-      id TEXT PRIMARY KEY,
-      group_id TEXT,
-      description TEXT NOT NULL,
-      amount REAL NOT NULL,
-      currency TEXT DEFAULT 'USD',
-      category TEXT DEFAULT 'general',
-      split_type TEXT DEFAULT 'equal',
-      date TEXT NOT NULL,
-      notes TEXT,
-      receipt_url TEXT,
-      is_recurring INTEGER DEFAULT 0,
-      recurring_interval TEXT,
-      created_by TEXT NOT NULL,
-      created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now')),
-      FOREIGN KEY (group_id) REFERENCES groups_table(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS expense_payers (
-      id TEXT PRIMARY KEY,
-      expense_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      user_name TEXT NOT NULL,
-      amount REAL NOT NULL,
-      FOREIGN KEY (expense_id) REFERENCES expenses(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS expense_splits (
-      id TEXT PRIMARY KEY,
-      expense_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      user_name TEXT NOT NULL,
-      amount REAL NOT NULL,
-      percentage REAL,
-      shares REAL,
-      FOREIGN KEY (expense_id) REFERENCES expenses(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS activities (
-      id TEXT PRIMARY KEY,
-      type TEXT NOT NULL,
-      description TEXT NOT NULL,
-      amount REAL,
-      currency TEXT,
-      group_id TEXT,
-      group_name TEXT,
-      expense_id TEXT,
-      created_by TEXT NOT NULL,
-      created_by_name TEXT NOT NULL,
-      created_at TEXT DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE IF NOT EXISTS settlements (
-      id TEXT PRIMARY KEY,
-      from_user_id TEXT NOT NULL,
-      from_user_name TEXT NOT NULL,
-      to_user_id TEXT NOT NULL,
-      to_user_name TEXT NOT NULL,
-      amount REAL NOT NULL,
-      currency TEXT DEFAULT 'USD',
-      group_id TEXT,
-      date TEXT NOT NULL,
-      notes TEXT,
-      created_at TEXT DEFAULT (datetime('now'))
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_expenses_group ON expenses(group_id);
-    CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date);
-    CREATE INDEX IF NOT EXISTS idx_expense_payers_expense ON expense_payers(expense_id);
-    CREATE INDEX IF NOT EXISTS idx_expense_splits_expense ON expense_splits(expense_id);
-    CREATE INDEX IF NOT EXISTS idx_activities_date ON activities(created_at);
-    CREATE INDEX IF NOT EXISTS idx_friends_user ON friends(user_id);
-    CREATE INDEX IF NOT EXISTS idx_group_members_group ON group_members(group_id);
-  `);
-};
-
-// Simple hash for local-only password storage (not a real backend)
-const simpleHash = (str: string): string => {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash;
-  }
-  return 'h_' + Math.abs(hash).toString(36) + '_' + str.length;
+  return result;
 };
 
 // ============ USER OPERATIONS ============
 
-export const createUser = async (user: Omit<User, 'id' | 'createdAt'> & { password?: string }): Promise<User> => {
-  const database = await getDatabase();
-  const id = uuidv4();
+export const createUser = async (
+  user: Omit<User, 'id' | 'createdAt'> & { password?: string }
+): Promise<User> => {
+  const id = user.email.replace(/[^a-zA-Z0-9]/g, '_');
   const createdAt = new Date().toISOString();
-  const passwordHash = user.password ? simpleHash(user.password) : null;
-  await database.runAsync(
-    'INSERT INTO users (id, email, name, phone, password_hash, avatar_url, default_currency, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    [id, user.email, user.name, user.phone || null, passwordHash, user.avatarUrl || null, user.defaultCurrency || 'USD', createdAt]
-  );
-  return { id, email: user.email, name: user.name, phone: user.phone, defaultCurrency: user.defaultCurrency || 'USD', createdAt };
-};
-
-export const verifyPassword = async (email: string, password: string): Promise<boolean> => {
-  const database = await getDatabase();
-  const row = await database.getFirstAsync<any>('SELECT password_hash FROM users WHERE email = ?', [email]);
-  if (!row || !row.password_hash) return true;
-  return row.password_hash === simpleHash(password);
+  const userData = {
+    email: user.email,
+    name: user.name,
+    phone: user.phone || null,
+    avatarUrl: user.avatarUrl || null,
+    defaultCurrency: user.defaultCurrency || 'USD',
+    createdAt,
+  };
+  await setDoc(doc(db, 'users', id), userData);
+  return {
+    id,
+    email: userData.email,
+    name: userData.name,
+    phone: userData.phone || undefined,
+    avatarUrl: userData.avatarUrl || undefined,
+    defaultCurrency: userData.defaultCurrency,
+    createdAt,
+  };
 };
 
 export const getUser = async (id: string): Promise<User | null> => {
-  const database = await getDatabase();
-  const row = await database.getFirstAsync<any>('SELECT * FROM users WHERE id = ?', [id]);
-  if (!row) return null;
-  return mapUser(row);
+  const snap = await getDoc(doc(db, 'users', id));
+  if (!snap.exists()) return null;
+  return { id: snap.id, ...snap.data() } as User;
 };
 
 export const getUserByEmail = async (email: string): Promise<User | null> => {
-  const database = await getDatabase();
-  const row = await database.getFirstAsync<any>('SELECT * FROM users WHERE email = ?', [email]);
-  if (!row) return null;
-  return mapUser(row);
+  const normalized = email.trim().toLowerCase();
+  if (!normalized) return null;
+  const q = query(collection(db, 'users'), where('email', '==', normalized));
+  const snap = await getDocs(q);
+  if (snap.empty) return null;
+  const d = snap.docs[0];
+  return { id: d.id, ...d.data() } as User;
 };
 
 export const updateUser = async (id: string, updates: Partial<User>): Promise<void> => {
-  const database = await getDatabase();
-  const fields: string[] = [];
-  const values: any[] = [];
-  if (updates.name !== undefined) { fields.push('name = ?'); values.push(updates.name); }
-  if (updates.email !== undefined) { fields.push('email = ?'); values.push(updates.email); }
-  if (updates.phone !== undefined) { fields.push('phone = ?'); values.push(updates.phone); }
-  if (updates.avatarUrl !== undefined) { fields.push('avatar_url = ?'); values.push(updates.avatarUrl); }
-  if (updates.defaultCurrency !== undefined) { fields.push('default_currency = ?'); values.push(updates.defaultCurrency); }
-  if (fields.length === 0) return;
-  values.push(id);
-  await database.runAsync(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`, values);
+  const data: any = {};
+  if (updates.name !== undefined) data.name = updates.name;
+  if (updates.email !== undefined) data.email = updates.email;
+  if (updates.phone !== undefined) data.phone = updates.phone;
+  if (updates.avatarUrl !== undefined) data.avatarUrl = updates.avatarUrl;
+  if (updates.defaultCurrency !== undefined) data.defaultCurrency = updates.defaultCurrency;
+  if (updates.role !== undefined) data.role = updates.role;
+  if (Object.keys(data).length === 0) return;
+  await updateDoc(doc(db, 'users', id), data);
+};
+
+export const getAllUsers = async (): Promise<User[]> => {
+  const snap = await getDocs(collection(db, 'users'));
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as User));
 };
 
 // ============ FRIEND OPERATIONS ============
 
 export const addFriend = async (friend: Omit<Friend, 'id' | 'createdAt'>): Promise<Friend> => {
-  const database = await getDatabase();
-  const id = uuidv4();
+  const id = genId();
   const createdAt = new Date().toISOString();
-  await database.runAsync(
-    'INSERT INTO friends (id, user_id, friend_id, friend_name, friend_email, friend_phone, friend_avatar_url, balance, currency, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [id, friend.userId, friend.friendId, friend.friendName, friend.friendEmail || null, friend.friendPhone || null, friend.friendAvatarUrl || null, friend.balance || 0, friend.currency || 'USD', createdAt]
-  );
+  const data = {
+    userId: friend.userId,
+    friendId: friend.friendId,
+    friendName: friend.friendName,
+    friendEmail: friend.friendEmail || null,
+    friendPhone: friend.friendPhone || null,
+    friendAvatarUrl: friend.friendAvatarUrl || null,
+    balance: friend.balance || 0,
+    currency: friend.currency || 'USD',
+    status: friend.status || 'linked',
+    inviteEmail: friend.inviteEmail || null,
+    invitePhone: friend.invitePhone || null,
+    createdAt,
+  };
+  await setDoc(doc(db, 'friends', id), data);
   return { id, ...friend, createdAt };
 };
 
 export const getFriends = async (userId: string): Promise<Friend[]> => {
-  const database = await getDatabase();
-  const rows = await database.getAllAsync<any>('SELECT * FROM friends WHERE user_id = ? ORDER BY friend_name', [userId]);
-  return rows.map(mapFriend);
+  const q = query(
+    collection(db, 'friends'),
+    where('userId', '==', userId)
+  );
+  const snap = await getDocs(q);
+  return snap.docs
+    .map((d) => ({ id: d.id, ...d.data() } as Friend))
+    .sort((a, b) => (a.friendName || '').localeCompare(b.friendName || ''));
 };
 
 export const updateFriendBalance = async (friendId: string, balance: number): Promise<void> => {
-  const database = await getDatabase();
-  await database.runAsync('UPDATE friends SET balance = ? WHERE id = ?', [balance, friendId]);
+  await updateDoc(doc(db, 'friends', friendId), { balance });
 };
 
 export const deleteFriend = async (friendId: string): Promise<void> => {
-  const database = await getDatabase();
-  await database.runAsync('DELETE FROM friends WHERE id = ?', [friendId]);
+  await deleteDoc(doc(db, 'friends', friendId));
 };
 
 // ============ GROUP OPERATIONS ============
 
-export const createGroup = async (group: Omit<Group, 'id' | 'createdAt' | 'updatedAt'>): Promise<Group> => {
-  const database = await getDatabase();
-  const id = uuidv4();
+export const createGroup = async (
+  group: Omit<Group, 'id' | 'createdAt' | 'updatedAt'>
+): Promise<Group> => {
+  const id = genId();
   const now = new Date().toISOString();
-
-  await database.runAsync(
-    'INSERT INTO groups_table (id, name, type, image_url, simplify_debts, default_currency, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    [id, group.name, group.type, group.imageUrl || null, group.simplifyDebts ? 1 : 0, group.defaultCurrency || 'USD', now, now]
-  );
-
-  for (const member of group.members) {
-    const memberId = uuidv4();
-    await database.runAsync(
-      'INSERT INTO group_members (id, group_id, user_id, name, email, phone, avatar_url) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [memberId, id, member.userId, member.name, member.email || null, member.phone || null, member.avatarUrl || null]
-    );
-  }
-
-  return { ...group, id, createdAt: now, updatedAt: now };
+  const data = {
+    name: group.name,
+    type: group.type,
+    imageUrl: group.imageUrl || null,
+    simplifyDebts: group.simplifyDebts || false,
+    defaultCurrency: group.defaultCurrency || 'USD',
+    defaultSplitType: group.defaultSplitType || null,
+    defaultSplitConfig: group.defaultSplitConfig || null,
+    members: group.members.map((m) => ({
+      id: genId(),
+      userId: m.userId,
+      name: m.name,
+      email: m.email || null,
+      phone: m.phone || null,
+      avatarUrl: m.avatarUrl || null,
+    })),
+    createdAt: now,
+    updatedAt: now,
+  };
+  await setDoc(doc(db, 'groups', id), data);
+  return { ...data, id } as Group;
 };
 
 export const getGroups = async (): Promise<Group[]> => {
-  const database = await getDatabase();
-  const groupRows = await database.getAllAsync<any>('SELECT * FROM groups_table ORDER BY updated_at DESC');
-  const groups: Group[] = [];
-  for (const row of groupRows) {
-    const members = await database.getAllAsync<any>('SELECT * FROM group_members WHERE group_id = ?', [row.id]);
-    groups.push(mapGroup(row, members));
-  }
-  return groups;
+  const q = query(collection(db, 'groups'), orderBy('updatedAt', 'desc'));
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as Group));
 };
 
 export const getGroup = async (id: string): Promise<Group | null> => {
-  const database = await getDatabase();
-  const row = await database.getFirstAsync<any>('SELECT * FROM groups_table WHERE id = ?', [id]);
-  if (!row) return null;
-  const members = await database.getAllAsync<any>('SELECT * FROM group_members WHERE group_id = ?', [id]);
-  return mapGroup(row, members);
+  const snap = await getDoc(doc(db, 'groups', id));
+  if (!snap.exists()) return null;
+  return { id: snap.id, ...snap.data() } as Group;
 };
 
 export const updateGroup = async (id: string, updates: Partial<Group>): Promise<void> => {
-  const database = await getDatabase();
-  const fields: string[] = ['updated_at = ?'];
-  const values: any[] = [new Date().toISOString()];
-  if (updates.name !== undefined) { fields.push('name = ?'); values.push(updates.name); }
-  if (updates.type !== undefined) { fields.push('type = ?'); values.push(updates.type); }
-  if (updates.simplifyDebts !== undefined) { fields.push('simplify_debts = ?'); values.push(updates.simplifyDebts ? 1 : 0); }
-  values.push(id);
-  await database.runAsync(`UPDATE groups_table SET ${fields.join(', ')} WHERE id = ?`, values);
+  const data: any = { updatedAt: new Date().toISOString() };
+  if (updates.name !== undefined) data.name = updates.name;
+  if (updates.type !== undefined) data.type = updates.type;
+  if (updates.simplifyDebts !== undefined) data.simplifyDebts = updates.simplifyDebts;
+  if (updates.defaultSplitType !== undefined) data.defaultSplitType = updates.defaultSplitType || null;
+  if (updates.defaultSplitConfig !== undefined) data.defaultSplitConfig = updates.defaultSplitConfig || null;
+  await updateDoc(doc(db, 'groups', id), data);
 };
 
 export const deleteGroup = async (id: string): Promise<void> => {
-  const database = await getDatabase();
-  await database.runAsync('DELETE FROM groups_table WHERE id = ?', [id]);
+  await deleteDoc(doc(db, 'groups', id));
 };
 
-export const addGroupMember = async (groupId: string, member: Omit<GroupMember, 'id'>): Promise<GroupMember> => {
-  const database = await getDatabase();
-  const id = uuidv4();
-  await database.runAsync(
-    'INSERT INTO group_members (id, group_id, user_id, name, email, phone, avatar_url) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [id, groupId, member.userId, member.name, member.email || null, member.phone || null, member.avatarUrl || null]
-  );
-  await database.runAsync('UPDATE groups_table SET updated_at = ? WHERE id = ?', [new Date().toISOString(), groupId]);
-  return { id, ...member };
+export const addGroupMember = async (
+  groupId: string,
+  member: Omit<GroupMember, 'id'>
+): Promise<GroupMember> => {
+  const group = await getGroup(groupId);
+  if (!group) throw new Error('Group not found');
+  const alreadyIn = group.members.some((m) => m.userId === member.userId);
+  if (alreadyIn) throw new Error('Member already in group');
+  const newMember: GroupMember = {
+    id: genId(),
+    userId: member.userId,
+    name: member.name,
+    email: member.email || undefined,
+    phone: member.phone || undefined,
+    avatarUrl: member.avatarUrl || undefined,
+  };
+  const updatedMembers = [...group.members, newMember];
+  await updateDoc(doc(db, 'groups', groupId), {
+    members: updatedMembers,
+    updatedAt: new Date().toISOString(),
+  });
+  return newMember;
 };
 
 export const removeGroupMember = async (groupId: string, memberId: string): Promise<void> => {
-  const database = await getDatabase();
-  await database.runAsync('DELETE FROM group_members WHERE id = ? AND group_id = ?', [memberId, groupId]);
+  const group = await getGroup(groupId);
+  if (!group) return;
+  const updatedMembers = group.members.filter((m) => m.id !== memberId);
+  await updateDoc(doc(db, 'groups', groupId), {
+    members: updatedMembers,
+    updatedAt: new Date().toISOString(),
+  });
 };
 
 // ============ EXPENSE OPERATIONS ============
 
-export const createExpense = async (expense: Omit<Expense, 'id' | 'createdAt' | 'updatedAt'>): Promise<Expense> => {
-  const database = await getDatabase();
-  const id = uuidv4();
+export const createExpense = async (
+  expense: Omit<Expense, 'id' | 'createdAt' | 'updatedAt'>
+): Promise<Expense> => {
+  const id = genId();
   const now = new Date().toISOString();
-
-  await database.runAsync(
-    `INSERT INTO expenses (id, group_id, description, amount, currency, category, split_type, date, notes, receipt_url, is_recurring, recurring_interval, created_by, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, expense.groupId || null, expense.description, expense.amount, expense.currency, expense.category,
-     expense.splitType, expense.date, expense.notes || null, expense.receiptUrl || null,
-     expense.isRecurring ? 1 : 0, expense.recurringInterval || null, expense.createdBy, now, now]
-  );
-
-  for (const payer of expense.paidBy) {
-    await database.runAsync(
-      'INSERT INTO expense_payers (id, expense_id, user_id, user_name, amount) VALUES (?, ?, ?, ?, ?)',
-      [uuidv4(), id, payer.userId, payer.userName, payer.amount]
-    );
-  }
-
-  for (const split of expense.splitBetween) {
-    await database.runAsync(
-      'INSERT INTO expense_splits (id, expense_id, user_id, user_name, amount, percentage, shares) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [uuidv4(), id, split.userId, split.userName, split.amount, split.percentage || null, split.shares || null]
-    );
-  }
+  const data: Record<string, unknown> = {
+    groupId: expense.groupId || null,
+    description: expense.description,
+    amount: expense.amount,
+    currency: expense.currency,
+    category: expense.category,
+    splitType: expense.splitType,
+    date: expense.date,
+    notes: expense.notes || null,
+    receiptUrl: expense.receiptUrl || null,
+    isRecurring: expense.isRecurring || false,
+    recurringInterval: expense.recurringInterval || null,
+    createdBy: expense.createdBy,
+    paidBy: expense.paidBy,
+    splitBetween: expense.splitBetween,
+    createdAt: now,
+    updatedAt: now,
+  };
+  if (expense.fxToGroupRate != null) data.fxToGroupRate = expense.fxToGroupRate;
+  if (expense.fxUpdatedAt != null) data.fxUpdatedAt = expense.fxUpdatedAt;
+  await setDoc(doc(db, 'expenses', id), data);
 
   if (expense.groupId) {
-    await database.runAsync('UPDATE groups_table SET updated_at = ? WHERE id = ?', [now, expense.groupId]);
+    await updateDoc(doc(db, 'groups', expense.groupId), {
+      updatedAt: now,
+    }).catch(() => { });
   }
 
-  return { ...expense, id, createdAt: now, updatedAt: now };
+  return { ...data, id } as Expense;
+};
+
+export const updateExpense = async (
+  id: string,
+  updates: Partial<Omit<Expense, 'id' | 'createdAt'>>
+): Promise<Expense | null> => {
+  const existing = await getExpense(id);
+  if (!existing) return null;
+  const now = new Date().toISOString();
+  const patch: Record<string, unknown> = { ...updates, updatedAt: now };
+  delete patch.id;
+  delete patch.createdAt;
+  await updateDoc(doc(db, 'expenses', id), patch);
+  const groupId = updates.groupId ?? existing.groupId;
+  if (groupId) {
+    await updateDoc(doc(db, 'groups', groupId), { updatedAt: now }).catch(() => {});
+  }
+  return { ...existing, ...updates, id, updatedAt: now } as Expense;
 };
 
 export const getExpenses = async (groupId?: string): Promise<Expense[]> => {
-  const database = await getDatabase();
-  let rows: any[];
+  let q;
   if (groupId) {
-    rows = await database.getAllAsync<any>('SELECT * FROM expenses WHERE group_id = ? ORDER BY date DESC', [groupId]);
+    q = query(
+      collection(db, 'expenses'),
+      where('groupId', '==', groupId)
+    );
   } else {
-    rows = await database.getAllAsync<any>('SELECT * FROM expenses ORDER BY date DESC');
+    q = query(collection(db, 'expenses'));
   }
-
-  const expenses: Expense[] = [];
-  for (const row of rows) {
-    const payers = await database.getAllAsync<any>('SELECT * FROM expense_payers WHERE expense_id = ?', [row.id]);
-    const splits = await database.getAllAsync<any>('SELECT * FROM expense_splits WHERE expense_id = ?', [row.id]);
-    expenses.push(mapExpense(row, payers, splits));
-  }
-  return expenses;
+  const snap = await getDocs(q);
+  return snap.docs
+    .map((d) => ({ id: d.id, ...d.data() } as Expense))
+    .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 };
 
 export const getExpense = async (id: string): Promise<Expense | null> => {
-  const database = await getDatabase();
-  const row = await database.getFirstAsync<any>('SELECT * FROM expenses WHERE id = ?', [id]);
-  if (!row) return null;
-  const payers = await database.getAllAsync<any>('SELECT * FROM expense_payers WHERE expense_id = ?', [id]);
-  const splits = await database.getAllAsync<any>('SELECT * FROM expense_splits WHERE expense_id = ?', [id]);
-  return mapExpense(row, payers, splits);
+  const snap = await getDoc(doc(db, 'expenses', id));
+  if (!snap.exists()) return null;
+  return { id: snap.id, ...snap.data() } as Expense;
 };
 
 export const deleteExpense = async (id: string): Promise<void> => {
-  const database = await getDatabase();
-  await database.runAsync('DELETE FROM expenses WHERE id = ?', [id]);
+  await deleteDoc(doc(db, 'expenses', id));
 };
 
-export const searchExpenses = async (query: string): Promise<Expense[]> => {
-  const database = await getDatabase();
-  const rows = await database.getAllAsync<any>(
-    'SELECT * FROM expenses WHERE description LIKE ? ORDER BY date DESC',
-    [`%${query}%`]
-  );
-  const expenses: Expense[] = [];
-  for (const row of rows) {
-    const payers = await database.getAllAsync<any>('SELECT * FROM expense_payers WHERE expense_id = ?', [row.id]);
-    const splits = await database.getAllAsync<any>('SELECT * FROM expense_splits WHERE expense_id = ?', [row.id]);
-    expenses.push(mapExpense(row, payers, splits));
+export const searchExpenses = async (queryStr: string): Promise<Expense[]> => {
+  // Firestore doesn't support LIKE — fetch all and filter client-side
+  const q = query(collection(db, 'expenses'), orderBy('date', 'desc'));
+  const snap = await getDocs(q);
+  const lower = queryStr.toLowerCase();
+  return snap.docs
+    .map((d) => ({ id: d.id, ...d.data() } as Expense))
+    .filter((e) => e.description.toLowerCase().includes(lower));
+};
+
+export interface AnalyticsFilter {
+  groupId?: string;
+  dateFrom?: string; // YYYY-MM-DD
+  dateTo?: string;   // YYYY-MM-DD
+  userId?: string;   // expenses where user is in paidBy or splitBetween
+}
+
+export const getExpensesForAnalytics = async (filters?: AnalyticsFilter): Promise<Expense[]> => {
+  let expenses = await getExpenses(filters?.groupId ?? undefined);
+  if (filters?.dateFrom) {
+    expenses = expenses.filter((e) => (e.date || '') >= filters!.dateFrom!);
+  }
+  if (filters?.dateTo) {
+    expenses = expenses.filter((e) => (e.date || '') <= filters!.dateTo!);
+  }
+  if (filters?.userId) {
+    const uid = filters.userId;
+    expenses = expenses.filter(
+      (e) =>
+        (e.paidBy && e.paidBy.some((p) => p.userId === uid)) ||
+        (e.splitBetween && e.splitBetween.some((s) => s.userId === uid))
+    );
   }
   return expenses;
 };
 
-export const getExpensesByCategory = async (): Promise<{ category: string; total: number }[]> => {
-  const database = await getDatabase();
-  return database.getAllAsync<{ category: string; total: number }>(
-    'SELECT category, SUM(amount) as total FROM expenses GROUP BY category ORDER BY total DESC'
-  );
+export const getExpensesByCategory = async (filters?: AnalyticsFilter): Promise<{ category: string; total: number }[]> => {
+  const expenses = await getExpensesForAnalytics(filters);
+  const map: Record<string, number> = {};
+  for (const e of expenses) {
+    map[e.category] = (map[e.category] || 0) + e.amount;
+  }
+  return Object.entries(map)
+    .map(([category, total]) => ({ category, total }))
+    .sort((a, b) => b.total - a.total);
 };
 
-export const getExpensesByMonth = async (): Promise<{ month: string; total: number }[]> => {
-  const database = await getDatabase();
-  return database.getAllAsync<{ month: string; total: number }>(
-    `SELECT strftime('%Y-%m', date) as month, SUM(amount) as total FROM expenses GROUP BY month ORDER BY month DESC LIMIT 12`
-  );
+export const getExpensesByMonth = async (filters?: AnalyticsFilter): Promise<{ month: string; total: number }[]> => {
+  const expenses = await getExpensesForAnalytics(filters);
+  const map: Record<string, number> = {};
+  for (const e of expenses) {
+    const month = (e.date || '').substring(0, 7);
+    if (month.length === 7) map[month] = (map[month] || 0) + e.amount;
+  }
+  return Object.entries(map)
+    .map(([month, total]) => ({ month, total }))
+    .sort((a, b) => b.month.localeCompare(a.month))
+    .slice(0, 12);
+};
+
+export interface AnalyticsResult {
+  expenses: Expense[];
+  categoryTotals: { category: string; total: number }[];
+  monthlyTotals: { month: string; total: number }[];
+}
+
+export const getAnalytics = async (filters?: AnalyticsFilter): Promise<AnalyticsResult> => {
+  const expenses = await getExpensesForAnalytics(filters);
+  const categoryMap: Record<string, number> = {};
+  const monthMap: Record<string, number> = {};
+  for (const e of expenses) {
+    categoryMap[e.category] = (categoryMap[e.category] || 0) + e.amount;
+    const month = (e.date || '').substring(0, 7);
+    if (month.length === 7) monthMap[month] = (monthMap[month] || 0) + e.amount;
+  }
+  const categoryTotals = Object.entries(categoryMap)
+    .map(([category, total]) => ({ category, total }))
+    .sort((a, b) => b.total - a.total);
+  const monthlyTotals = Object.entries(monthMap)
+    .map(([month, total]) => ({ month, total }))
+    .sort((a, b) => b.month.localeCompare(a.month))
+    .slice(0, 12);
+  return { expenses, categoryTotals, monthlyTotals };
 };
 
 // ============ ACTIVITY OPERATIONS ============
 
-export const createActivity = async (activity: Omit<Activity, 'id' | 'createdAt'>): Promise<Activity> => {
-  const database = await getDatabase();
-  const id = uuidv4();
+export const createActivity = async (
+  activity: Omit<Activity, 'id' | 'createdAt'>
+): Promise<Activity> => {
+  const id = genId();
   const createdAt = new Date().toISOString();
-  await database.runAsync(
-    `INSERT INTO activities (id, type, description, amount, currency, group_id, group_name, expense_id, created_by, created_by_name, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, activity.type, activity.description, activity.amount || null, activity.currency || null,
-     activity.groupId || null, activity.groupName || null, activity.expenseId || null,
-     activity.createdBy, activity.createdByName, createdAt]
-  );
-  return { ...activity, id, createdAt };
+  const data = {
+    type: activity.type,
+    description: activity.description,
+    amount: activity.amount || null,
+    currency: activity.currency || null,
+    groupId: activity.groupId || null,
+    groupName: activity.groupName || null,
+    expenseId: activity.expenseId || null,
+    createdBy: activity.createdBy,
+    createdByName: activity.createdByName,
+    createdAt,
+  };
+  await setDoc(doc(db, 'activities', id), data);
+  return { ...data, id } as Activity;
 };
 
-export const getActivities = async (limit: number = 50): Promise<Activity[]> => {
-  const database = await getDatabase();
-  const rows = await database.getAllAsync<any>(
-    'SELECT * FROM activities ORDER BY created_at DESC LIMIT ?', [limit]
+export const getActivities = async (limitCount: number = 50): Promise<Activity[]> => {
+  const q = query(
+    collection(db, 'activities'),
+    orderBy('createdAt', 'desc'),
+    limit(limitCount)
   );
-  return rows.map(mapActivity);
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as Activity));
 };
 
 // ============ SETTLEMENT OPERATIONS ============
 
-export const createSettlement = async (settlement: Omit<Settlement, 'id' | 'createdAt'>): Promise<Settlement> => {
-  const database = await getDatabase();
-  const id = uuidv4();
+export const createSettlement = async (
+  settlement: Omit<Settlement, 'id' | 'createdAt'>
+): Promise<Settlement> => {
+  const id = genId();
   const createdAt = new Date().toISOString();
-  await database.runAsync(
-    `INSERT INTO settlements (id, from_user_id, from_user_name, to_user_id, to_user_name, amount, currency, group_id, date, notes, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, settlement.fromUserId, settlement.fromUserName, settlement.toUserId, settlement.toUserName,
-     settlement.amount, settlement.currency, settlement.groupId || null, settlement.date, settlement.notes || null, createdAt]
-  );
-  return { ...settlement, id, createdAt };
+  const data = {
+    fromUserId: settlement.fromUserId,
+    fromUserName: settlement.fromUserName,
+    toUserId: settlement.toUserId,
+    toUserName: settlement.toUserName,
+    amount: settlement.amount,
+    currency: settlement.currency,
+    groupId: settlement.groupId || null,
+    date: settlement.date,
+    notes: settlement.notes || null,
+    createdAt,
+  };
+  await setDoc(doc(db, 'settlements', id), data);
+  return { ...data, id } as Settlement;
 };
 
 export const getSettlements = async (groupId?: string): Promise<Settlement[]> => {
-  const database = await getDatabase();
-  let rows: any[];
+  let q;
   if (groupId) {
-    rows = await database.getAllAsync<any>('SELECT * FROM settlements WHERE group_id = ? ORDER BY date DESC', [groupId]);
+    q = query(
+      collection(db, 'settlements'),
+      where('groupId', '==', groupId)
+    );
   } else {
-    rows = await database.getAllAsync<any>('SELECT * FROM settlements ORDER BY date DESC');
+    q = query(collection(db, 'settlements'));
   }
-  return rows.map(mapSettlement);
+  const snap = await getDocs(q);
+  return snap.docs
+    .map((d) => ({ id: d.id, ...d.data() } as Settlement))
+    .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 };
 
 // ============ BALANCE CALCULATIONS ============
 
-export const calculateGroupBalances = async (groupId: string, currentUserId: string): Promise<Balance[]> => {
-  const database = await getDatabase();
-  const members = await database.getAllAsync<any>('SELECT * FROM group_members WHERE group_id = ?', [groupId]);
+export const calculateGroupBalances = async (
+  groupId: string,
+  currentUserId: string
+): Promise<Balance[]> => {
+  const group = await getGroup(groupId);
+  if (!group) return [];
+
+  const groupCurrency = group.defaultCurrency || 'USD';
   const expenses = await getExpenses(groupId);
   const settlements = await getSettlements(groupId);
 
   const balanceMap: Record<string, number> = {};
-  members.forEach((m: any) => { balanceMap[m.user_id] = 0; });
+  group.members.forEach((m) => {
+    balanceMap[m.userId] = 0;
+  });
 
   for (const expense of expenses) {
+    let rate = 1;
+    const expCurrency = expense.currency || 'USD';
+    if (expCurrency !== groupCurrency) {
+      if (expense.fxToGroupRate != null && expense.fxToGroupRate > 0) {
+        rate = expense.fxToGroupRate;
+      } else {
+        try {
+          const res = await getRate(expCurrency, groupCurrency);
+          rate = res.rate;
+          await updateExpense(expense.id, { fxToGroupRate: rate, fxUpdatedAt: res.updatedAt }).catch(() => {});
+        } catch {
+          rate = 1;
+        }
+      }
+    }
     for (const payer of expense.paidBy) {
       if (balanceMap[payer.userId] !== undefined) {
-        balanceMap[payer.userId] += payer.amount;
+        balanceMap[payer.userId] += payer.amount * rate;
       }
     }
     for (const split of expense.splitBetween) {
       if (balanceMap[split.userId] !== undefined) {
-        balanceMap[split.userId] -= split.amount;
+        balanceMap[split.userId] -= split.amount * rate;
       }
     }
   }
 
   for (const s of settlements) {
-    if (balanceMap[s.fromUserId] !== undefined) balanceMap[s.fromUserId] += s.amount;
-    if (balanceMap[s.toUserId] !== undefined) balanceMap[s.toUserId] -= s.amount;
+    let settleRate = 1;
+    if (s.currency && s.currency !== groupCurrency) {
+      try {
+        const res = await getRate(s.currency, groupCurrency);
+        settleRate = res.rate;
+      } catch {}
+    }
+    if (balanceMap[s.fromUserId] !== undefined) balanceMap[s.fromUserId] += s.amount * settleRate;
+    if (balanceMap[s.toUserId] !== undefined) balanceMap[s.toUserId] -= s.amount * settleRate;
   }
 
-  return members.map((m: any) => ({
-    userId: m.user_id,
+  return group.members.map((m) => ({
+    userId: m.userId,
     userName: m.name,
-    amount: balanceMap[m.user_id] || 0,
-    currency: 'USD',
+    amount: Math.round((balanceMap[m.userId] || 0) * 100) / 100,
+    currency: groupCurrency,
   }));
 };
 
 export const calculateTotalBalance = async (currentUserId: string): Promise<number> => {
+  const user = await getUser(currentUserId);
+  const userCurrency = user?.defaultCurrency || 'USD';
   const groups = await getGroups();
   let total = 0;
   for (const group of groups) {
     const balances = await calculateGroupBalances(group.id, currentUserId);
     const myBalance = balances.find((b) => b.userId === currentUserId);
-    if (myBalance) total += myBalance.amount;
+    if (!myBalance) continue;
+    if (myBalance.currency === userCurrency) {
+      total += myBalance.amount;
+    } else {
+      try {
+        const { amount } = await import('./fx').then((m) => m.convert(myBalance.amount, myBalance.currency, userCurrency));
+        total += amount;
+      } catch {
+        total += myBalance.amount;
+      }
+    }
   }
-  return total;
+  return Math.round(total * 100) / 100;
+};
+
+const getNextRecurringDate = (dateStr: string, interval: RecurringInterval | null | undefined): string | null => {
+  if (!interval) return null;
+  if (!dateStr) return null;
+  const base = new Date(`${dateStr}T00:00:00`);
+  if (Number.isNaN(base.getTime())) return null;
+
+  const d = new Date(base.getTime());
+  switch (interval) {
+    case 'daily':
+      d.setDate(d.getDate() + 1);
+      break;
+    case 'weekly':
+      d.setDate(d.getDate() + 7);
+      break;
+    case 'biweekly':
+      d.setDate(d.getDate() + 14);
+      break;
+    case 'monthly':
+      d.setMonth(d.getMonth() + 1);
+      break;
+    case 'yearly':
+      d.setFullYear(d.getFullYear() + 1);
+      break;
+    default:
+      return null;
+  }
+  return d.toISOString().split('T')[0];
+};
+
+/**
+ * Generate next occurrences for recurring expenses created by the given user.
+ * For each series, only the latest expense keeps isRecurring=true; older ones are flipped to false.
+ * Runs at app startup; idempotent per day (per series it will create at most one new expense per run).
+ */
+export const generateRecurringExpensesForUser = async (currentUserId: string): Promise<number> => {
+  const todayStr = new Date().toISOString().split('T')[0];
+  const q = query(
+    collection(db, 'expenses'),
+    where('createdBy', '==', currentUserId),
+    where('isRecurring', '==', true)
+  );
+  const snap = await getDocs(q);
+  if (snap.empty) return 0;
+
+  let createdCount = 0;
+
+  for (const docSnap of snap.docs) {
+    const data = { id: docSnap.id, ...docSnap.data() } as Expense;
+    const nextDate = getNextRecurringDate(data.date, data.recurringInterval);
+    if (!nextDate) continue;
+    if (nextDate > todayStr) continue;
+
+    const { id, createdAt, updatedAt, ...rest } = data as any;
+    const input: Omit<Expense, 'id' | 'createdAt' | 'updatedAt'> = {
+      ...(rest as any),
+      date: nextDate,
+    };
+
+    const created = await createExpense(input);
+
+    // Mark previous instance as non-recurring so the series advances.
+    await updateExpense(data.id, { isRecurring: false });
+
+    createdCount += 1;
+  }
+
+  return createdCount;
 };
 
 export const simplifyDebts = (balances: Balance[]): DebtSimplification[] => {
+  const currency = balances[0]?.currency || 'USD';
   const debtors: { userId: string; userName: string; amount: number }[] = [];
   const creditors: { userId: string; userName: string; amount: number }[] = [];
 
@@ -526,7 +633,7 @@ export const simplifyDebts = (balances: Balance[]): DebtSimplification[] => {
         to: creditors[j].userId,
         toName: creditors[j].userName,
         amount: Math.round(amount * 100) / 100,
-        currency: 'USD',
+        currency,
       });
     }
     debtors[i].amount -= amount;
@@ -538,14 +645,66 @@ export const simplifyDebts = (balances: Balance[]): DebtSimplification[] => {
   return result;
 };
 
+/**
+ * Compute friend balances from ledger (expenses + settlements) per group.
+ * Balance from currentUser POV: positive = friend owes me.
+ * All amounts returned in currentUser.defaultCurrency.
+ */
+export const getComputedFriendBalances = async (
+  currentUserId: string,
+  friendIds: string[]
+): Promise<Record<string, number>> => {
+  const result: Record<string, number> = {};
+  friendIds.forEach((id) => { result[id] = 0; });
+
+  const user = await getUser(currentUserId);
+  const userCurrency = user?.defaultCurrency || 'USD';
+  const { convert } = await import('./fx');
+
+  const groups = await getGroups();
+  for (const group of groups) {
+    const memberIds = new Set(group.members.map((m) => m.userId));
+    if (!memberIds.has(currentUserId)) continue;
+
+    const balances = await calculateGroupBalances(group.id, currentUserId);
+    const debts = simplifyDebts(balances);
+    const groupCurrency = balances[0]?.currency || group.defaultCurrency || 'USD';
+
+    for (const d of debts) {
+      let amountInUser = d.amount;
+      if (groupCurrency !== userCurrency) {
+        try {
+          const { amount } = await convert(d.amount, groupCurrency, userCurrency);
+          amountInUser = amount;
+        } catch {}
+      }
+      const from = d.from;
+      const to = d.to;
+      if (from === currentUserId && friendIds.includes(to)) {
+        result[to] = (result[to] ?? 0) - amountInUser;
+      } else if (to === currentUserId && friendIds.includes(from)) {
+        result[from] = (result[from] ?? 0) + amountInUser;
+      }
+    }
+  }
+
+  Object.keys(result).forEach((k) => {
+    result[k] = Math.round((result[k] ?? 0) * 100) / 100;
+  });
+  return result;
+};
+
 // ============ SEED DATA ============
 
-export const seedDemoData = async (currentUserId: string, currentUserName: string): Promise<void> => {
-  const database = await getDatabase();
-  const existing = await database.getFirstAsync<any>('SELECT COUNT(*) as count FROM groups_table');
-  if (existing && existing.count > 0) return;
+export const seedDemoData = async (
+  currentUserId: string,
+  currentUserName: string
+): Promise<void> => {
+  // Check if data already exists
+  const existingGroups = await getGroups();
+  if (existingGroups.length > 0) return;
 
-  const friendIds = [uuidv4(), uuidv4(), uuidv4(), uuidv4()];
+  const friendIds = [genId(), genId(), genId(), genId()];
   const friends = [
     { name: 'Alice Johnson', email: 'alice@example.com', phone: '+1 555-0101' },
     { name: 'Bob Smith', email: 'bob@example.com', phone: '+1 555-0102' },
@@ -569,9 +728,9 @@ export const seedDemoData = async (currentUserId: string, currentUserName: strin
     name: 'Apartment 4B',
     type: 'home',
     members: [
-      { userId: currentUserId, name: currentUserName, email: 'you@example.com' },
-      { userId: friendIds[0], name: friends[0].name, email: friends[0].email },
-      { userId: friendIds[1], name: friends[1].name, email: friends[1].email },
+      { id: '', userId: currentUserId, name: currentUserName, email: 'you@example.com' },
+      { id: '', userId: friendIds[0], name: friends[0].name, email: friends[0].email },
+      { id: '', userId: friendIds[1], name: friends[1].name, email: friends[1].email },
     ],
     simplifyDebts: true,
     defaultCurrency: 'USD',
@@ -581,10 +740,10 @@ export const seedDemoData = async (currentUserId: string, currentUserName: strin
     name: 'Europe Trip 2026',
     type: 'trip',
     members: [
-      { userId: currentUserId, name: currentUserName, email: 'you@example.com' },
-      { userId: friendIds[0], name: friends[0].name, email: friends[0].email },
-      { userId: friendIds[2], name: friends[2].name, email: friends[2].email },
-      { userId: friendIds[3], name: friends[3].name, email: friends[3].email },
+      { id: '', userId: currentUserId, name: currentUserName, email: 'you@example.com' },
+      { id: '', userId: friendIds[0], name: friends[0].name, email: friends[0].email },
+      { id: '', userId: friendIds[2], name: friends[2].name, email: friends[2].email },
+      { id: '', userId: friendIds[3], name: friends[3].name, email: friends[3].email },
     ],
     simplifyDebts: true,
     defaultCurrency: 'EUR',
@@ -683,104 +842,5 @@ export const seedDemoData = async (currentUserId: string, currentUserName: strin
   }
 };
 
-// ============ MAPPERS ============
-
-const mapUser = (row: any): User => ({
-  id: row.id,
-  email: row.email,
-  name: row.name,
-  phone: row.phone,
-  avatarUrl: row.avatar_url,
-  defaultCurrency: row.default_currency,
-  createdAt: row.created_at,
-});
-
-const mapFriend = (row: any): Friend => ({
-  id: row.id,
-  userId: row.user_id,
-  friendId: row.friend_id,
-  friendName: row.friend_name,
-  friendEmail: row.friend_email || '',
-  friendPhone: row.friend_phone || '',
-  friendAvatarUrl: row.friend_avatar_url,
-  balance: row.balance,
-  currency: row.currency,
-  createdAt: row.created_at,
-});
-
-const mapGroup = (row: any, memberRows: any[]): Group => ({
-  id: row.id,
-  name: row.name,
-  type: row.type as GroupType,
-  imageUrl: row.image_url,
-  members: memberRows.map((m) => ({
-    id: m.id,
-    userId: m.user_id,
-    name: m.name,
-    email: m.email || '',
-    phone: m.phone || '',
-    avatarUrl: m.avatar_url,
-  })),
-  simplifyDebts: row.simplify_debts === 1,
-  defaultCurrency: row.default_currency,
-  createdAt: row.created_at,
-  updatedAt: row.updated_at,
-});
-
-const mapExpense = (row: any, payerRows: any[], splitRows: any[]): Expense => ({
-  id: row.id,
-  groupId: row.group_id,
-  description: row.description,
-  amount: row.amount,
-  currency: row.currency,
-  category: row.category as ExpenseCategory,
-  paidBy: payerRows.map((p) => ({
-    userId: p.user_id,
-    userName: p.user_name,
-    amount: p.amount,
-  })),
-  splitBetween: splitRows.map((s) => ({
-    userId: s.user_id,
-    userName: s.user_name,
-    amount: s.amount,
-    percentage: s.percentage,
-    shares: s.shares,
-  })),
-  splitType: row.split_type as SplitType,
-  date: row.date,
-  notes: row.notes,
-  receiptUrl: row.receipt_url,
-  isRecurring: row.is_recurring === 1,
-  recurringInterval: row.recurring_interval,
-  createdBy: row.created_by,
-  createdAt: row.created_at,
-  updatedAt: row.updated_at,
-});
-
-const mapActivity = (row: any): Activity => ({
-  id: row.id,
-  type: row.type,
-  description: row.description,
-  amount: row.amount,
-  currency: row.currency,
-  groupId: row.group_id,
-  groupName: row.group_name,
-  expenseId: row.expense_id,
-  createdBy: row.created_by,
-  createdByName: row.created_by_name,
-  createdAt: row.created_at,
-});
-
-const mapSettlement = (row: any): Settlement => ({
-  id: row.id,
-  fromUserId: row.from_user_id,
-  fromUserName: row.from_user_name,
-  toUserId: row.to_user_id,
-  toUserName: row.to_user_name,
-  amount: row.amount,
-  currency: row.currency,
-  groupId: row.group_id,
-  date: row.date,
-  notes: row.notes,
-  createdAt: row.created_at,
-});
+// ============ REMOVED (no longer needed) ============
+// getDatabase, initDatabase, simpleHash, verifyPassword — handled by Firebase Auth

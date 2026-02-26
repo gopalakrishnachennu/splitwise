@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { Friend } from '@/types';
 import * as db from '@/services/database';
+import { useAuthStore } from '@/stores/useAuthStore';
 
 interface FriendState {
   friends: Friend[];
@@ -19,7 +20,15 @@ export const useFriendStore = create<FriendState>((set, get) => ({
     set({ isLoading: true });
     try {
       const friends = await db.getFriends(userId);
-      set({ friends, isLoading: false });
+      const friendIds = friends.filter((f) => (f.status ?? 'linked') === 'linked').map((f) => f.friendId);
+      const computed = await db.getComputedFriendBalances(userId, friendIds);
+      const userCurrency = useAuthStore.getState().user?.defaultCurrency || 'USD';
+      const withBalances = friends.map((f) => ({
+        ...f,
+        balance: (f.status ?? 'linked') === 'linked' ? (computed[f.friendId] ?? 0) : 0,
+        currency: userCurrency,
+      }));
+      set({ friends: withBalances, isLoading: false });
     } catch (error) {
       console.error('Error fetching friends:', error);
       set({ isLoading: false });

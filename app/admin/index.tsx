@@ -94,6 +94,17 @@ export default function AdminDashboard() {
         </Text>
       </View>
 
+      {/* Owner control summary */}
+      <View style={[styles.ownerCard, { backgroundColor: '#5BC5A712', borderColor: '#5BC5A740' }]}>
+        <View style={styles.ownerCardRow}>
+          <MaterialIcons name="admin-panel-settings" size={20} color="#5BC5A7" />
+          <Text style={[styles.ownerCardTitle, { color: colors.text }]}>You have full control</Text>
+        </View>
+        <Text style={[styles.ownerCardText, { color: colors.textSecondary }]}>
+          Users · Groups · Expenses · Analytics · Activity log (including admin actions) · System & maintenance · Promote/remove admins · App settings & branding. See Settings for the full list.
+        </Text>
+      </View>
+
       {/* Metric Cards */}
       <View style={[styles.cardGrid, { gap: 12 }]}>
         {metricCards.map((card, idx) => (
@@ -191,6 +202,15 @@ const styles = StyleSheet.create({
   header: { marginBottom: 16 },
   title: { fontSize: 26, fontWeight: '800', letterSpacing: -0.5 },
   subtitle: { fontSize: 14, marginTop: 4 },
+  ownerCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 14,
+    marginBottom: 20,
+  },
+  ownerCardRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
+  ownerCardTitle: { fontSize: 15, fontWeight: '700' },
+  ownerCardText: { fontSize: 13, lineHeight: 20 },
   cardGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',

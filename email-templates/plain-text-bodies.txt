@@ -1,0 +1,44 @@
+# Plain-text bodies for Firebase Console (if HTML is not supported)
+# Copy the section you need into Authentication → Templates → [Template] → Message body.
+# Keep the variables %APP_NAME%, %EMAIL%, %LINK% as-is; Firebase will replace them.
+
+# ---------- Email address verification ----------
+# Subject: Verify your email – %APP_NAME%
+
+Verify your email
+
+Thanks for signing up. Confirm that %EMAIL% belongs to you by opening this link:
+
+%LINK%
+
+If you didn’t create an account with %APP_NAME%, you can safely ignore this email.
+
+%APP_NAME% · Account security
+
+
+# ---------- Password reset ----------
+# Subject: Reset your password – %APP_NAME%
+
+Reset your password
+
+We received a request to reset the password for %EMAIL%. Open the link below to choose a new password:
+
+%LINK%
+
+This link expires in 1 hour. If you didn’t request a password reset, you can safely ignore this email. Your password will not change.
+
+%APP_NAME% · Account security
+
+
+# ---------- Email address change ----------
+# Subject: Confirm your new email – %APP_NAME%
+
+Confirm your new email
+
+A request was made to change the account email to %NEW_EMAIL%. Confirm by opening this link:
+
+%LINK%
+
+If you didn’t request this change, you can safely ignore this email.
+
+%APP_NAME% · Account security

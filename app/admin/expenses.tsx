@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useThemeColors, useDeviceType, useDebounce } from '@/utils/hooks';
+import { useAuthStore } from '@/stores/useAuthStore';
 import { AdminExpense, getAdminExpenses, deleteExpenseAdmin } from '@/services/admin';
 import { haptic } from '@/utils/haptics';
 import { CATEGORIES, getCategoryInfo } from '@/constants/Categories';
@@ -21,6 +22,7 @@ export default function AdminExpensesScreen() {
   const [category, setCategory] = useState('all');
   const [refreshing, setRefreshing] = useState(false);
   const debouncedSearch = useDebounce(search, 300);
+  const currentUser = useAuthStore((s) => s.user);
 
   const isWide = deviceType !== 'phone';
 
@@ -56,7 +58,9 @@ export default function AdminExpensesScreen() {
           style: 'destructive',
           onPress: async () => {
             haptic.heavy();
-            await deleteExpenseAdmin(expense.id);
+            await deleteExpenseAdmin(expense.id, currentUser
+              ? { adminUserId: currentUser.id, adminUserName: currentUser.name, description: expense.description }
+              : undefined);
             fetchExpenses();
           },
         },

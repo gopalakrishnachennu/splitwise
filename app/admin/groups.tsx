@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useThemeColors, useDeviceType, useDebounce } from '@/utils/hooks';
+import { useAuthStore } from '@/stores/useAuthStore';
 import { AdminGroup, getAdminGroups, deleteGroupAdmin } from '@/services/admin';
 import { haptic } from '@/utils/haptics';
 
@@ -23,6 +24,7 @@ export default function AdminGroupsScreen() {
   const [search, setSearch] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const debouncedSearch = useDebounce(search, 300);
+  const currentUser = useAuthStore((s) => s.user);
 
   const isWide = deviceType !== 'phone';
 
@@ -58,7 +60,9 @@ export default function AdminGroupsScreen() {
           style: 'destructive',
           onPress: async () => {
             haptic.heavy();
-            await deleteGroupAdmin(group.id);
+            await deleteGroupAdmin(group.id, currentUser
+              ? { adminUserId: currentUser.id, adminUserName: currentUser.name, groupName: group.name }
+              : undefined);
             fetchGroups();
             Alert.alert('Deleted', `Group "${group.name}" has been deleted.`);
           },

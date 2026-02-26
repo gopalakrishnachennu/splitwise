@@ -46,9 +46,12 @@ export default function RootLayout() {
         <Stack.Screen name="(auth)" options={{ headerShown: false }} />
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="group/[id]" options={{ title: 'Group', headerBackTitle: 'Back' }} />
-        <Stack.Screen name="expense/add" options={{ title: 'Add Expense', presentation: 'modal' }} />
-        <Stack.Screen name="expense/[id]" options={{ title: 'Expense Details', headerBackTitle: 'Back' }} />
+        <Stack.Screen name="expense/personal" options={{ title: 'Personal expenses', headerBackTitle: 'Back' }} />
+        <Stack.Screen name="expense/add" options={{ headerShown: false, presentation: 'modal' }} />
+        <Stack.Screen name="expense/receipt-scan" options={{ headerShown: false, presentation: 'modal', title: 'Scan receipt' }} />
+        <Stack.Screen name="expense/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="friend/[id]" options={{ title: 'Friend', headerBackTitle: 'Back' }} />
+        <Stack.Screen name="friend/add" options={{ title: 'Add friend', headerBackTitle: 'Back' }} />
         <Stack.Screen name="group/create" options={{ title: 'Create Group', presentation: 'modal' }} />
         <Stack.Screen name="search" options={{ title: 'Search', headerBackTitle: 'Back' }} />
         <Stack.Screen name="settle-up" options={{ title: 'Settle Up', presentation: 'modal' }} />

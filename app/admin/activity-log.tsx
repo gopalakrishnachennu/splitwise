@@ -13,11 +13,13 @@ const TYPE_CONFIG: Record<string, { icon: string; color: string }> = {
   expense_updated: { icon: 'edit', color: '#6C5CE7' },
   expense_deleted: { icon: 'delete', color: '#E74C3C' },
   group_created: { icon: 'group-add', color: '#00B894' },
-  group_deleted: { icon: 'group-remove', color: '#E17055' },
-  friend_added: { icon: 'person-add', color: '#55EFC4' },
-  friend_removed: { icon: 'person-remove', color: '#FF7675' },
+  member_added: { icon: 'person-add', color: '#55EFC4' },
+  member_removed: { icon: 'person-remove', color: '#FF7675' },
   settlement: { icon: 'swap-horiz', color: '#FDCB6E' },
-  payment: { icon: 'payment', color: '#A29BFE' },
+  admin_user_deleted: { icon: 'admin-panel-settings', color: '#E74C3C' },
+  admin_group_deleted: { icon: 'admin-panel-settings', color: '#E17055' },
+  admin_expense_deleted: { icon: 'admin-panel-settings', color: '#E74C3C' },
+  admin_role_changed: { icon: 'security', color: '#5BC5A7' },
 };
 
 export default function AdminActivityLogScreen() {
@@ -58,8 +60,8 @@ export default function AdminActivityLogScreen() {
     { key: 'all', label: 'All' },
     { key: 'expense', label: 'Expenses' },
     { key: 'group', label: 'Groups' },
-    { key: 'friend', label: 'Friends' },
     { key: 'settlement', label: 'Settlements' },
+    { key: 'admin', label: 'Admin actions' },
   ];
 
   const formatTimestamp = (ts: string): string => {

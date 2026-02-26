@@ -1,91 +1,31 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, KeyboardAvoidingView, Platform,
-  ScrollView, TouchableOpacity, Alert, Image,
+  ScrollView, TouchableOpacity,
 } from 'react-native';
 import { router } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
-import * as Google from 'expo-auth-session/providers/google';
-import * as WebBrowser from 'expo-web-browser';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useThemeColors, useDeviceType } from '@/utils/hooks';
 import { haptic } from '@/utils/haptics';
 import { Input } from '@/components/Input';
 import { Button } from '@/components/Button';
 
-WebBrowser.maybeCompleteAuthSession();
-
-const GOOGLE_WEB_CLIENT_ID = '850454103918-ni0oih2qe9p9nvnb35ug17adto242mie.apps.googleusercontent.com';
-
 export default function LoginScreen() {
   const colors = useThemeColors();
   const deviceType = useDeviceType();
-  const { login, loginWithGoogle } = useAuthStore();
+  const { login, loginWithApple, resetPassword } = useAuthStore();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [googleLoading, setGoogleLoading] = useState(false);
+  const [appleLoading, setAppleLoading] = useState(false);
+  const [forgotPasswordLoading, setForgotPasswordLoading] = useState(false);
+  const [forgotPasswordMessage, setForgotPasswordMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [error, setError] = useState('');
 
   const isWide = deviceType !== 'phone';
-
-  const [request, response, promptAsync] = Google.useAuthRequest({
-    webClientId: GOOGLE_WEB_CLIENT_ID,
-    scopes: ['profile', 'email'],
-  });
-
-  useEffect(() => {
-    if (response?.type === 'success') {
-      handleGoogleResponse(response.authentication?.accessToken);
-    } else if (response?.type === 'error') {
-      setGoogleLoading(false);
-      setError('Google sign-in was cancelled or failed.');
-    } else if (response?.type === 'dismiss') {
-      setGoogleLoading(false);
-    }
-  }, [response]);
-
-  const handleGoogleResponse = async (accessToken?: string | null) => {
-    if (!accessToken) {
-      setGoogleLoading(false);
-      setError('Failed to get Google access token.');
-      return;
-    }
-
-    try {
-      const res = await fetch('https://www.googleapis.com/userinfo/v2/me', {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      const userInfo = await res.json();
-
-      if (!userInfo.email) {
-        setGoogleLoading(false);
-        setError('Could not get email from Google account.');
-        return;
-      }
-
-      const result = await loginWithGoogle({
-        email: userInfo.email,
-        name: userInfo.name || userInfo.email.split('@')[0],
-        photo: userInfo.picture,
-      });
-
-      setGoogleLoading(false);
-      if (result.success) {
-        haptic.success();
-        router.replace('/(tabs)');
-      } else {
-        haptic.error();
-        setError(result.error || 'Google sign-in failed.');
-      }
-    } catch (e) {
-      setGoogleLoading(false);
-      console.error('Google userinfo fetch error:', e);
-      setError('Failed to fetch Google profile. Check your internet connection.');
-    }
-  };
 
   const handleLogin = async () => {
     setError('');
@@ -101,24 +41,24 @@ export default function LoginScreen() {
     }
   };
 
-  const handleGoogleLogin = async () => {
+  const handleForgotPassword = async () => {
+    setForgotPasswordMessage(null);
     setError('');
-    setGoogleLoading(true);
-    haptic.light();
-    try {
-      await promptAsync();
-    } catch (e) {
-      setGoogleLoading(false);
-      setError('Could not open Google sign-in.');
+    if (!email.trim()) {
+      setForgotPasswordMessage({ type: 'error', text: 'Enter your email above, then tap Forgot password.' });
+      return;
     }
-  };
-
-  const handleForgotPassword = () => {
-    Alert.alert(
-      'Reset Password',
-      'Since this app uses local storage, your password is stored on this device. If you forgot it, please create a new account.',
-      [{ text: 'OK' }]
-    );
+    setForgotPasswordLoading(true);
+    const result = await resetPassword(email.trim());
+    setForgotPasswordLoading(false);
+    if (result.success) {
+      setForgotPasswordMessage({
+        type: 'success',
+        text: 'Check your inbox for a password reset link. If you don’t see it, check spam.',
+      });
+    } else {
+      setForgotPasswordMessage({ type: 'error', text: result.error || 'Failed to send reset email.' });
+    }
   };
 
   return (
@@ -148,11 +88,34 @@ export default function LoginScreen() {
             </View>
           ) : null}
 
+          {forgotPasswordMessage ? (
+            <View style={[
+              styles.messageBox,
+              {
+                backgroundColor: forgotPasswordMessage.type === 'success'
+                  ? colors.primary + '18'
+                  : colors.error + '15',
+              },
+            ]}>
+              <MaterialIcons
+                name={forgotPasswordMessage.type === 'success' ? 'mark-email-read' : 'error-outline'}
+                size={18}
+                color={forgotPasswordMessage.type === 'success' ? colors.primary : colors.error}
+              />
+              <Text style={[
+                styles.messageText,
+                { color: forgotPasswordMessage.type === 'success' ? colors.primary : colors.error },
+              ]}>
+                {forgotPasswordMessage.text}
+              </Text>
+            </View>
+          ) : null}
+
           <Input
             label="Email"
-            placeholder="yourname@gmail.com"
+            placeholder="your@email.com"
             value={email}
-            onChangeText={(t) => { setEmail(t); setError(''); }}
+            onChangeText={(t) => { setEmail(t); setError(''); setForgotPasswordMessage(null); }}
             keyboardType="email-address"
             autoCapitalize="none"
             autoComplete="email"
@@ -168,10 +131,20 @@ export default function LoginScreen() {
             leftIcon="lock"
             rightIcon={showPassword ? 'visibility-off' : 'visibility'}
             onRightIconPress={() => setShowPassword(!showPassword)}
+            returnKeyType="go"
+            onSubmitEditing={handleLogin}
           />
 
-          <TouchableOpacity style={styles.forgotPassword} onPress={handleForgotPassword}>
-            <Text style={[styles.forgotText, { color: colors.primary }]}>Forgot password?</Text>
+          <TouchableOpacity
+            style={styles.forgotPassword}
+            onPress={handleForgotPassword}
+            disabled={forgotPasswordLoading}
+          >
+            {forgotPasswordLoading ? (
+              <Text style={[styles.forgotText, { color: colors.textTertiary }]}>Sending reset link…</Text>
+            ) : (
+              <Text style={[styles.forgotText, { color: colors.primary }]}>Forgot password?</Text>
+            )}
           </TouchableOpacity>
 
           <Button
@@ -183,25 +156,32 @@ export default function LoginScreen() {
             style={{ marginTop: 8 }}
           />
 
-          <View style={styles.dividerRow}>
-            <View style={[styles.dividerLine, { backgroundColor: colors.border }]} />
-            <Text style={[styles.dividerText, { color: colors.textTertiary }]}>or</Text>
-            <View style={[styles.dividerLine, { backgroundColor: colors.border }]} />
-          </View>
-
-          <TouchableOpacity
-            style={[styles.googleBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
-            onPress={handleGoogleLogin}
-            disabled={googleLoading || !request}
-            activeOpacity={0.7}
-          >
-            <View style={styles.googleIconWrap}>
-              <Text style={{ fontSize: 18 }}>G</Text>
-            </View>
-            <Text style={[styles.googleBtnText, { color: colors.text }]}>
-              {googleLoading ? 'Signing in...' : 'Continue with Google'}
-            </Text>
-          </TouchableOpacity>
+          {Platform.OS === 'ios' && (
+            <TouchableOpacity
+              style={[styles.appleBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
+              onPress={async () => {
+                setError('');
+                setAppleLoading(true);
+                haptic.light();
+                const result = await loginWithApple();
+                setAppleLoading(false);
+                if (result.success) {
+                  haptic.success();
+                  router.replace('/(tabs)');
+                } else {
+                  haptic.error();
+                  if (result.error) setError(result.error);
+                }
+              }}
+              disabled={appleLoading}
+              activeOpacity={0.7}
+            >
+              <MaterialIcons name="apple" size={22} color={colors.text} />
+              <Text style={[styles.googleBtnText, { color: colors.text }]}>
+                {appleLoading ? 'Signing in...' : 'Continue with Apple'}
+              </Text>
+            </TouchableOpacity>
+          )}
 
           <View style={styles.signupRow}>
             <Text style={[styles.signupText, { color: colors.textSecondary }]}>
@@ -253,19 +233,21 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   errorText: { fontSize: 14, flex: 1 },
+  messageBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 10,
+    marginBottom: 16,
+    gap: 8,
+  },
+  messageText: { fontSize: 14, flex: 1 },
   forgotPassword: {
     alignSelf: 'flex-end',
     marginBottom: 8,
   },
   forgotText: { fontSize: 14, fontWeight: '500' },
-  dividerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginVertical: 24,
-  },
-  dividerLine: { flex: 1, height: 1 },
-  dividerText: { marginHorizontal: 16, fontSize: 14 },
-  googleBtn: {
+  appleBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -273,18 +255,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1.5,
     gap: 10,
-  },
-  googleIconWrap: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: '#4285F4',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  googleBtnText: {
-    fontSize: 15,
-    fontWeight: '600',
+    marginTop: 10,
   },
   signupRow: {
     flexDirection: 'row',

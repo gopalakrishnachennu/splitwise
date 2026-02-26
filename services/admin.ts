@@ -1,4 +1,9 @@
-import { getDatabase } from './database';
+import {
+  collection, doc, getDoc, getDocs, deleteDoc,
+  query, where, orderBy, limit, setDoc,
+} from 'firebase/firestore';
+import { db } from './firebase';
+import * as dbService from './database';
 
 export interface AdminStats {
   totalUsers: number;
@@ -23,6 +28,7 @@ export interface AdminUser {
   totalSpent: number;
   isSuspended: boolean;
   tags: string;
+  role?: 'admin' | 'user';
 }
 
 export interface AdminGroup {
@@ -76,257 +82,388 @@ export interface AdminActivity {
 // ============ DASHBOARD STATS ============
 
 export const getAdminStats = async (): Promise<AdminStats> => {
-  const db = await getDatabase();
+  const [users, groups, expenses, settlements, activities] = await Promise.all([
+    getDocs(collection(db, 'users')),
+    getDocs(collection(db, 'groups')),
+    getDocs(collection(db, 'expenses')),
+    getDocs(collection(db, 'settlements')),
+    getDocs(collection(db, 'activities')),
+  ]);
 
-  const users = await db.getFirstAsync<any>('SELECT COUNT(*) as c FROM users');
-  const groups = await db.getFirstAsync<any>('SELECT COUNT(*) as c FROM groups_table');
-  const expenses = await db.getFirstAsync<any>('SELECT COUNT(*) as c FROM expenses');
-  const settlements = await db.getFirstAsync<any>('SELECT COUNT(*) as c FROM settlements');
-  const moneyTracked = await db.getFirstAsync<any>('SELECT COALESCE(SUM(amount), 0) as total FROM expenses');
-  const activities = await db.getFirstAsync<any>('SELECT COUNT(*) as c FROM activities');
+  let totalMoneyTracked = 0;
+  expenses.docs.forEach((d) => { totalMoneyTracked += d.data().amount || 0; });
 
-  const recentSignups = await db.getFirstAsync<any>(
-    `SELECT COUNT(*) as c FROM users WHERE created_at >= datetime('now', '-24 hours')`
-  );
-  const activeToday = await db.getFirstAsync<any>(
-    `SELECT COUNT(*) as c FROM users WHERE created_at >= datetime('now', '-1 day')`
-  );
+  const now = Date.now();
+  const oneDayAgo = now - 24 * 60 * 60 * 1000;
+  let recentSignups = 0;
+  let activeUsersToday = 0;
+  users.docs.forEach((d) => {
+    const created = new Date(d.data().createdAt).getTime();
+    if (created >= oneDayAgo) { recentSignups++; activeUsersToday++; }
+  });
 
   return {
-    totalUsers: users?.c || 0,
-    totalGroups: groups?.c || 0,
-    totalExpenses: expenses?.c || 0,
-    totalSettlements: settlements?.c || 0,
-    totalMoneyTracked: moneyTracked?.total || 0,
-    totalActivities: activities?.c || 0,
-    recentSignups: recentSignups?.c || 0,
-    activeUsersToday: activeToday?.c || 0,
+    totalUsers: users.size,
+    totalGroups: groups.size,
+    totalExpenses: expenses.size,
+    totalSettlements: settlements.size,
+    totalMoneyTracked,
+    totalActivities: activities.size,
+    recentSignups,
+    activeUsersToday,
   };
 };
 
 // ============ USER MANAGEMENT ============
 
 export const getAdminUsers = async (search?: string): Promise<AdminUser[]> => {
-  const db = await getDatabase();
-  let query = `
-    SELECT u.*,
-      (SELECT COUNT(*) FROM group_members gm WHERE gm.user_id = u.id) as group_count,
-      (SELECT COUNT(*) FROM expense_payers ep WHERE ep.user_id = u.id) as expense_count,
-      (SELECT COALESCE(SUM(ep.amount), 0) FROM expense_payers ep WHERE ep.user_id = u.id) as total_spent
-    FROM users u
-  `;
-  const params: any[] = [];
+  const usersSnap = await getDocs(collection(db, 'users'));
+  const expensesSnap = await getDocs(collection(db, 'expenses'));
+  const groupsSnap = await getDocs(collection(db, 'groups'));
+
+  // Pre-compute per-user stats
+  const expenseCountMap: Record<string, number> = {};
+  const totalSpentMap: Record<string, number> = {};
+  expensesSnap.docs.forEach((d) => {
+    const data = d.data();
+    const paidBy = data.paidBy || [];
+    for (const p of paidBy) {
+      expenseCountMap[p.userId] = (expenseCountMap[p.userId] || 0) + 1;
+      totalSpentMap[p.userId] = (totalSpentMap[p.userId] || 0) + (p.amount || 0);
+    }
+  });
+
+  const groupCountMap: Record<string, number> = {};
+  groupsSnap.docs.forEach((d) => {
+    const members = d.data().members || [];
+    for (const m of members) {
+      groupCountMap[m.userId] = (groupCountMap[m.userId] || 0) + 1;
+    }
+  });
+
+  let users = usersSnap.docs.map((d) => {
+    const data = d.data();
+    const rawRole = (data.role ?? 'user') as string;
+    const normRole = typeof rawRole === 'string' && rawRole.toLowerCase() === 'admin' ? 'admin' : 'user';
+    return {
+      id: d.id,
+      name: data.name || '',
+      email: data.email || '',
+      phone: data.phone || null,
+      defaultCurrency: data.defaultCurrency || 'USD',
+      createdAt: data.createdAt || '',
+      groupCount: groupCountMap[d.id] || 0,
+      expenseCount: expenseCountMap[d.id] || 0,
+      totalSpent: totalSpentMap[d.id] || 0,
+      isSuspended: false,
+      tags: '',
+      role: normRole,
+    };
+  });
 
   if (search && search.trim()) {
-    query += ` WHERE u.name LIKE ? OR u.email LIKE ? OR u.phone LIKE ?`;
-    const s = `%${search.trim()}%`;
-    params.push(s, s, s);
+    const s = search.trim().toLowerCase();
+    users = users.filter((u) =>
+      u.name.toLowerCase().includes(s) ||
+      u.email.toLowerCase().includes(s) ||
+      (u.phone && u.phone.includes(s))
+    );
   }
 
-  query += ' ORDER BY u.created_at DESC';
-  const rows = await db.getAllAsync<any>(query, params);
-
-  return rows.map((r: any) => ({
-    id: r.id,
-    name: r.name,
-    email: r.email,
-    phone: r.phone,
-    defaultCurrency: r.default_currency,
-    createdAt: r.created_at,
-    groupCount: r.group_count,
-    expenseCount: r.expense_count,
-    totalSpent: r.total_spent,
-    isSuspended: false,
-    tags: '',
-  }));
+  users.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+  return users;
 };
 
-export const deleteUserAdmin = async (userId: string): Promise<void> => {
-  const db = await getDatabase();
-  await db.runAsync('DELETE FROM expense_splits WHERE user_id = ?', [userId]);
-  await db.runAsync('DELETE FROM expense_payers WHERE user_id = ?', [userId]);
-  await db.runAsync('DELETE FROM group_members WHERE user_id = ?', [userId]);
-  await db.runAsync('DELETE FROM friends WHERE user_id = ? OR friend_id = ?', [userId, userId]);
-  await db.runAsync('DELETE FROM settlements WHERE from_user_id = ? OR to_user_id = ?', [userId, userId]);
-  await db.runAsync('DELETE FROM users WHERE id = ?', [userId]);
+export const deleteUserAdmin = async (
+  userId: string,
+  options?: { adminUserId: string; adminUserName: string; targetUserName?: string }
+): Promise<void> => {
+  const friendsSnap = await getDocs(query(collection(db, 'friends'), where('userId', '==', userId)));
+  for (const d of friendsSnap.docs) await deleteDoc(d.ref);
+  const friendOfSnap = await getDocs(query(collection(db, 'friends'), where('friendId', '==', userId)));
+  for (const d of friendOfSnap.docs) await deleteDoc(d.ref);
+  await deleteDoc(doc(db, 'users', userId));
+
+  if (options?.adminUserId) {
+    await dbService.createActivity({
+      type: 'admin_user_deleted',
+      description: `Admin ${options.adminUserName} deleted user ${options.targetUserName || userId}`,
+      createdBy: options.adminUserId,
+      createdByName: options.adminUserName,
+    });
+  }
 };
 
 export const getUserExpenseHistory = async (userId: string): Promise<any[]> => {
-  const db = await getDatabase();
-  return db.getAllAsync<any>(
-    `SELECT e.*, ep.amount as paid_amount
-     FROM expenses e
-     JOIN expense_payers ep ON ep.expense_id = e.id AND ep.user_id = ?
-     ORDER BY e.date DESC LIMIT 50`,
-    [userId]
-  );
+  const expensesSnap = await getDocs(query(collection(db, 'expenses'), orderBy('date', 'desc')));
+  return expensesSnap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .filter((e: any) => e.paidBy?.some((p: any) => p.userId === userId))
+    .slice(0, 50);
 };
 
 // ============ GROUP MANAGEMENT ============
 
 export const getAdminGroups = async (search?: string): Promise<AdminGroup[]> => {
-  const db = await getDatabase();
-  let query = `
-    SELECT g.*,
-      (SELECT COUNT(*) FROM group_members gm WHERE gm.group_id = g.id) as member_count,
-      (SELECT COUNT(*) FROM expenses e WHERE e.group_id = g.id) as expense_count,
-      (SELECT COALESCE(SUM(e.amount), 0) FROM expenses e WHERE e.group_id = g.id) as total_amount
-    FROM groups_table g
-  `;
-  const params: any[] = [];
+  const groupsSnap = await getDocs(query(collection(db, 'groups'), orderBy('updatedAt', 'desc')));
+  const expensesSnap = await getDocs(collection(db, 'expenses'));
+
+  // Pre-compute per-group expense stats
+  const groupExpenseCount: Record<string, number> = {};
+  const groupTotalAmount: Record<string, number> = {};
+  expensesSnap.docs.forEach((d) => {
+    const gid = d.data().groupId;
+    if (gid) {
+      groupExpenseCount[gid] = (groupExpenseCount[gid] || 0) + 1;
+      groupTotalAmount[gid] = (groupTotalAmount[gid] || 0) + (d.data().amount || 0);
+    }
+  });
+
+  let groups = groupsSnap.docs.map((d) => {
+    const data = d.data();
+    return {
+      id: d.id,
+      name: data.name || '',
+      type: data.type || 'other',
+      memberCount: (data.members || []).length,
+      expenseCount: groupExpenseCount[d.id] || 0,
+      totalAmount: groupTotalAmount[d.id] || 0,
+      defaultCurrency: data.defaultCurrency || 'USD',
+      createdAt: data.createdAt || '',
+      updatedAt: data.updatedAt || '',
+    };
+  });
 
   if (search && search.trim()) {
-    query += ` WHERE g.name LIKE ?`;
-    params.push(`%${search.trim()}%`);
+    const s = search.trim().toLowerCase();
+    groups = groups.filter((g) => g.name.toLowerCase().includes(s));
   }
 
-  query += ' ORDER BY g.updated_at DESC';
-  const rows = await db.getAllAsync<any>(query, params);
-
-  return rows.map((r: any) => ({
-    id: r.id,
-    name: r.name,
-    type: r.type,
-    memberCount: r.member_count,
-    expenseCount: r.expense_count,
-    totalAmount: r.total_amount,
-    defaultCurrency: r.default_currency,
-    createdAt: r.created_at,
-    updatedAt: r.updated_at,
-  }));
+  return groups;
 };
 
-export const deleteGroupAdmin = async (groupId: string): Promise<void> => {
-  const db = await getDatabase();
-  await db.runAsync('DELETE FROM groups_table WHERE id = ?', [groupId]);
+export const deleteGroupAdmin = async (
+  groupId: string,
+  options?: { adminUserId: string; adminUserName: string; groupName?: string }
+): Promise<void> => {
+  await deleteDoc(doc(db, 'groups', groupId));
+  if (options?.adminUserId) {
+    await dbService.createActivity({
+      type: 'admin_group_deleted',
+      description: `Admin ${options.adminUserName} deleted group "${options.groupName || groupId}"`,
+      createdBy: options.adminUserId,
+      createdByName: options.adminUserName,
+    });
+  }
 };
 
 // ============ EXPENSE OVERSIGHT ============
 
 export const getAdminExpenses = async (search?: string, category?: string): Promise<AdminExpense[]> => {
-  const db = await getDatabase();
-  let query = `
-    SELECT e.*,
-      g.name as group_name,
-      (SELECT ep.user_name FROM expense_payers ep WHERE ep.expense_id = e.id LIMIT 1) as payer_name
-    FROM expenses e
-    LEFT JOIN groups_table g ON g.id = e.group_id
-    WHERE 1=1
-  `;
-  const params: any[] = [];
+  const expensesSnap = await getDocs(query(collection(db, 'expenses'), orderBy('date', 'desc')));
+  const groupsSnap = await getDocs(collection(db, 'groups'));
+
+  const groupNameMap: Record<string, string> = {};
+  groupsSnap.docs.forEach((d) => { groupNameMap[d.id] = d.data().name; });
+
+  let expenses = expensesSnap.docs.map((d) => {
+    const data = d.data();
+    return {
+      id: d.id,
+      description: data.description || '',
+      amount: data.amount || 0,
+      currency: data.currency || 'USD',
+      category: data.category || 'general',
+      splitType: data.splitType || 'equal',
+      date: data.date || '',
+      groupName: data.groupId ? (groupNameMap[data.groupId] || null) : null,
+      createdByName: data.paidBy?.[0]?.userName || 'Unknown',
+      createdAt: data.createdAt || '',
+      isFlagged: (data.amount || 0) > 10000,
+    };
+  });
 
   if (search && search.trim()) {
-    query += ` AND e.description LIKE ?`;
-    params.push(`%${search.trim()}%`);
+    const s = search.trim().toLowerCase();
+    expenses = expenses.filter((e) => e.description.toLowerCase().includes(s));
   }
   if (category && category !== 'all') {
-    query += ` AND e.category = ?`;
-    params.push(category);
+    expenses = expenses.filter((e) => e.category === category);
   }
 
-  query += ' ORDER BY e.created_at DESC LIMIT 100';
-  const rows = await db.getAllAsync<any>(query, params);
-
-  return rows.map((r: any) => ({
-    id: r.id,
-    description: r.description,
-    amount: r.amount,
-    currency: r.currency,
-    category: r.category,
-    splitType: r.split_type,
-    date: r.date,
-    groupName: r.group_name,
-    createdByName: r.payer_name || 'Unknown',
-    createdAt: r.created_at,
-    isFlagged: r.amount > 10000,
-  }));
+  return expenses.slice(0, 100);
 };
 
-export const deleteExpenseAdmin = async (expenseId: string): Promise<void> => {
-  const db = await getDatabase();
-  await db.runAsync('DELETE FROM expenses WHERE id = ?', [expenseId]);
+export const deleteExpenseAdmin = async (
+  expenseId: string,
+  options?: { adminUserId: string; adminUserName: string; description?: string }
+): Promise<void> => {
+  await deleteDoc(doc(db, 'expenses', expenseId));
+  if (options?.adminUserId) {
+    await dbService.createActivity({
+      type: 'admin_expense_deleted',
+      description: `Admin ${options.adminUserName} deleted expense "${options.description || expenseId}"`,
+      createdBy: options.adminUserId,
+      createdByName: options.adminUserName,
+    });
+  }
+};
+
+export const setUserRole = async (
+  userId: string,
+  role: 'admin' | 'user',
+  adminUserId: string,
+  adminUserName: string,
+  targetUserName?: string
+): Promise<void> => {
+  await dbService.updateUser(userId, { role });
+  await dbService.createActivity({
+    type: 'admin_role_changed',
+    description: `Admin ${adminUserName} set ${targetUserName || userId} as ${role}`,
+    createdBy: adminUserId,
+    createdByName: adminUserName,
+  });
 };
 
 // ============ ANALYTICS ============
 
 export const getTopCategories = async (): Promise<TopCategory[]> => {
-  const db = await getDatabase();
-  return db.getAllAsync<TopCategory>(
-    'SELECT category, COUNT(*) as count, SUM(amount) as total FROM expenses GROUP BY category ORDER BY total DESC'
-  );
+  const snap = await getDocs(collection(db, 'expenses'));
+  const map: Record<string, { count: number; total: number }> = {};
+  snap.docs.forEach((d) => {
+    const data = d.data();
+    const cat = data.category || 'general';
+    if (!map[cat]) map[cat] = { count: 0, total: 0 };
+    map[cat].count++;
+    map[cat].total += data.amount || 0;
+  });
+  return Object.entries(map)
+    .map(([category, { count, total }]) => ({ category, count, total }))
+    .sort((a, b) => b.total - a.total);
 };
 
 export const getDailySignups = async (): Promise<DailySignup[]> => {
-  const db = await getDatabase();
-  return db.getAllAsync<DailySignup>(
-    `SELECT date(created_at) as date, COUNT(*) as count FROM users GROUP BY date(created_at) ORDER BY date DESC LIMIT 30`
-  );
+  const snap = await getDocs(collection(db, 'users'));
+  const map: Record<string, number> = {};
+  snap.docs.forEach((d) => {
+    const date = (d.data().createdAt || '').substring(0, 10);
+    if (date) map[date] = (map[date] || 0) + 1;
+  });
+  return Object.entries(map)
+    .map(([date, count]) => ({ date, count }))
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .slice(0, 30);
 };
 
 export const getMonthlyExpenses = async (): Promise<{ month: string; total: number; count: number }[]> => {
-  const db = await getDatabase();
-  return db.getAllAsync<any>(
-    `SELECT strftime('%Y-%m', date) as month, SUM(amount) as total, COUNT(*) as count
-     FROM expenses GROUP BY month ORDER BY month DESC LIMIT 12`
-  );
+  const snap = await getDocs(collection(db, 'expenses'));
+  const map: Record<string, { total: number; count: number }> = {};
+  snap.docs.forEach((d) => {
+    const data = d.data();
+    const month = (data.date || '').substring(0, 7);
+    if (month) {
+      if (!map[month]) map[month] = { total: 0, count: 0 };
+      map[month].total += data.amount || 0;
+      map[month].count++;
+    }
+  });
+  return Object.entries(map)
+    .map(([month, { total, count }]) => ({ month, total, count }))
+    .sort((a, b) => b.month.localeCompare(a.month))
+    .slice(0, 12);
 };
 
-export const getTopUsers = async (limit: number = 10): Promise<{ name: string; email: string; total: number; count: number }[]> => {
-  const db = await getDatabase();
-  return db.getAllAsync<any>(
-    `SELECT u.name, u.email, COALESCE(SUM(ep.amount), 0) as total, COUNT(ep.id) as count
-     FROM users u
-     LEFT JOIN expense_payers ep ON ep.user_id = u.id
-     GROUP BY u.id
-     ORDER BY total DESC LIMIT ?`,
-    [limit]
-  );
+export const getTopUsers = async (limitCount: number = 10): Promise<{ name: string; email: string; total: number; count: number }[]> => {
+  const usersSnap = await getDocs(collection(db, 'users'));
+  const expensesSnap = await getDocs(collection(db, 'expenses'));
+
+  const userMap: Record<string, { name: string; email: string; total: number; count: number }> = {};
+  usersSnap.docs.forEach((d) => {
+    const data = d.data();
+    userMap[d.id] = { name: data.name, email: data.email, total: 0, count: 0 };
+  });
+
+  expensesSnap.docs.forEach((d) => {
+    const paidBy = d.data().paidBy || [];
+    for (const p of paidBy) {
+      if (userMap[p.userId]) {
+        userMap[p.userId].total += p.amount || 0;
+        userMap[p.userId].count++;
+      }
+    }
+  });
+
+  return Object.values(userMap)
+    .sort((a, b) => b.total - a.total)
+    .slice(0, limitCount);
 };
 
-export const getTopGroups = async (limit: number = 10): Promise<{ name: string; type: string; total: number; members: number }[]> => {
-  const db = await getDatabase();
-  return db.getAllAsync<any>(
-    `SELECT g.name, g.type,
-      COALESCE((SELECT SUM(e.amount) FROM expenses e WHERE e.group_id = g.id), 0) as total,
-      (SELECT COUNT(*) FROM group_members gm WHERE gm.group_id = g.id) as members
-     FROM groups_table g
-     ORDER BY total DESC LIMIT ?`,
-    [limit]
-  );
+export const getTopGroups = async (limitCount: number = 10): Promise<{ name: string; type: string; total: number; members: number }[]> => {
+  const groupsSnap = await getDocs(collection(db, 'groups'));
+  const expensesSnap = await getDocs(collection(db, 'expenses'));
+
+  const groupTotalMap: Record<string, number> = {};
+  expensesSnap.docs.forEach((d) => {
+    const gid = d.data().groupId;
+    if (gid) groupTotalMap[gid] = (groupTotalMap[gid] || 0) + (d.data().amount || 0);
+  });
+
+  return groupsSnap.docs
+    .map((d) => {
+      const data = d.data();
+      return {
+        name: data.name,
+        type: data.type || 'other',
+        total: groupTotalMap[d.id] || 0,
+        members: (data.members || []).length,
+      };
+    })
+    .sort((a, b) => b.total - a.total)
+    .slice(0, limitCount);
 };
 
 export const getCurrencyDistribution = async (): Promise<{ currency: string; count: number }[]> => {
-  const db = await getDatabase();
-  return db.getAllAsync<any>(
-    'SELECT currency, COUNT(*) as count FROM expenses GROUP BY currency ORDER BY count DESC'
-  );
+  const snap = await getDocs(collection(db, 'expenses'));
+  const map: Record<string, number> = {};
+  snap.docs.forEach((d) => {
+    const cur = d.data().currency || 'USD';
+    map[cur] = (map[cur] || 0) + 1;
+  });
+  return Object.entries(map)
+    .map(([currency, count]) => ({ currency, count }))
+    .sort((a, b) => b.count - a.count);
 };
 
 export const getSplitTypeDistribution = async (): Promise<{ splitType: string; count: number }[]> => {
-  const db = await getDatabase();
-  return db.getAllAsync<any>(
-    'SELECT split_type as splitType, COUNT(*) as count FROM expenses GROUP BY split_type ORDER BY count DESC'
-  );
+  const snap = await getDocs(collection(db, 'expenses'));
+  const map: Record<string, number> = {};
+  snap.docs.forEach((d) => {
+    const st = d.data().splitType || 'equal';
+    map[st] = (map[st] || 0) + 1;
+  });
+  return Object.entries(map)
+    .map(([splitType, count]) => ({ splitType, count }))
+    .sort((a, b) => b.count - a.count);
 };
 
 // ============ ACTIVITY LOG ============
 
-export const getAdminActivityLog = async (limit: number = 100): Promise<AdminActivity[]> => {
-  const db = await getDatabase();
-  const rows = await db.getAllAsync<any>(
-    'SELECT * FROM activities ORDER BY created_at DESC LIMIT ?',
-    [limit]
-  );
-  return rows.map((r: any) => ({
-    id: r.id,
-    type: r.type,
-    description: r.description,
-    amount: r.amount,
-    currency: r.currency,
-    groupName: r.group_name,
-    createdByName: r.created_by_name,
-    createdAt: r.created_at,
-  }));
+export const getAdminActivityLog = async (limitCount: number = 100): Promise<AdminActivity[]> => {
+  const q = query(collection(db, 'activities'), orderBy('createdAt', 'desc'), limit(limitCount));
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => {
+    const data = d.data();
+    return {
+      id: d.id,
+      type: data.type,
+      description: data.description,
+      amount: data.amount || null,
+      currency: data.currency || null,
+      groupName: data.groupName || null,
+      createdByName: data.createdByName || 'Unknown',
+      createdAt: data.createdAt || '',
+    };
+  });
 };
 
 // ============ SYSTEM HEALTH ============
@@ -336,24 +473,19 @@ export const getSystemHealth = async (): Promise<{
   dbSize: string;
   totalRecords: number;
 }> => {
-  const db = await getDatabase();
-
-  const tableNames = ['users', 'friends', 'groups_table', 'group_members', 'expenses',
-    'expense_payers', 'expense_splits', 'activities', 'settlements'];
-
+  const collectionNames = ['users', 'friends', 'groups', 'expenses', 'activities', 'settlements'];
   const tables: { name: string; rows: number }[] = [];
   let totalRecords = 0;
 
-  for (const name of tableNames) {
-    const result = await db.getFirstAsync<any>(`SELECT COUNT(*) as c FROM ${name}`);
-    const count = result?.c || 0;
-    tables.push({ name, rows: count });
-    totalRecords += count;
+  for (const name of collectionNames) {
+    const snap = await getDocs(collection(db, name));
+    tables.push({ name, rows: snap.size });
+    totalRecords += snap.size;
   }
 
   return {
     tables,
-    dbSize: `${(totalRecords * 0.5).toFixed(1)} KB`,
+    dbSize: `${(totalRecords * 0.5).toFixed(1)} KB (estimated)`,
     totalRecords,
   };
 };
@@ -364,4 +496,17 @@ const ADMIN_CODE = 'admin2026';
 
 export const verifyAdminAccess = (code: string): boolean => {
   return code === ADMIN_CODE;
+};
+
+// For future: check Firebase custom claims
+export const checkAdminClaim = async (): Promise<boolean> => {
+  try {
+    const { auth: firebaseAuth } = await import('./firebase');
+    const user = firebaseAuth.currentUser;
+    if (!user) return false;
+    const token = await user.getIdTokenResult();
+    return token.claims.admin === true;
+  } catch {
+    return false;
+  }
 };

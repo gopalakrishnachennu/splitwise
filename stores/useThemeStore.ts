@@ -30,7 +30,9 @@ export const useThemeStore = create<ThemeState>((set) => ({
   },
 
   setMode: async (mode: ThemeMode) => {
-    await AsyncStorage.setItem(STORAGE_KEY, mode);
     set({ mode });
+    try {
+      await AsyncStorage.setItem(STORAGE_KEY, mode);
+    } catch {}
   },
 }));

@@ -2,24 +2,25 @@ import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   Switch, Alert, useWindowDimensions, Modal, TextInput,
-  FlatList, Platform, Linking,
+  FlatList, Platform, Linking, TouchableWithoutFeedback,
 } from 'react-native';
 import { router } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useAuthStore } from '@/stores/useAuthStore';
+import { auth } from '@/services/firebase';
 import { useThemeStore } from '@/stores/useThemeStore';
 import { useThemeColors, useDeviceType } from '@/utils/hooks';
 import { haptic } from '@/utils/haptics';
 import { Avatar } from '@/components/Avatar';
 import { CURRENCIES, getCurrencyInfo } from '@/constants/Currencies';
 
-type ModalType = 'none' | 'currency' | 'language' | 'theme' | 'editProfile' | 'faq' | 'about' | 'privacy' | 'terms';
+type ModalType = 'none' | 'currency' | 'language' | 'theme' | 'editProfile' | 'faq' | 'about' | 'privacy' | 'terms' | 'changePassword' | 'deleteAccount' | 'logout';
 
 export default function AccountScreen() {
   const colors = useThemeColors();
   const deviceType = useDeviceType();
   const { width } = useWindowDimensions();
-  const { user, logout, updateProfile } = useAuthStore();
+  const { user, logout, updateProfile, emailVerified, sendVerificationEmail, refreshEmailVerified, changePassword, deleteAccount } = useAuthStore();
 
   const themeMode = useThemeStore((s) => s.mode);
   const setThemeMode = useThemeStore((s) => s.setMode);
@@ -28,6 +29,15 @@ export default function AccountScreen() {
   const [activeModal, setActiveModal] = useState<ModalType>('none');
   const [editName, setEditName] = useState(user?.name || '');
   const [currencySearch, setCurrencySearch] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [deletePassword, setDeletePassword] = useState('');
+  const [passwordError, setPasswordError] = useState('');
+  const [changePasswordLoading, setChangePasswordLoading] = useState(false);
+  const [deleteAccountLoading, setDeleteAccountLoading] = useState(false);
+  const [logoutLoading, setLogoutLoading] = useState(false);
+  const [verificationSending, setVerificationSending] = useState(false);
 
   const themeLabelMap: Record<string, string> = { system: 'System', light: 'Light', dark: 'Dark' };
   const selectedTheme = themeLabelMap[themeMode] || 'System';
@@ -35,16 +45,22 @@ export default function AccountScreen() {
   const isWide = deviceType !== 'phone';
   const contentMaxWidth = isWide ? 600 : width;
   const currencyInfo = getCurrencyInfo(user?.defaultCurrency || 'USD');
+  const hasPasswordProvider = auth.currentUser?.providerData?.some((p: any) => p.providerId === 'password') ?? false;
 
   const openModal = (type: ModalType) => { haptic.light(); setActiveModal(type); };
   const closeModal = () => setActiveModal('none');
 
+  const runLogout = async () => {
+    haptic.heavy();
+    setLogoutLoading(true);
+    await logout();
+    setLogoutLoading(false);
+    router.replace('/(auth)/login');
+  };
+
   const handleLogout = () => {
     haptic.warning();
-    Alert.alert('Log Out', 'Are you sure you want to log out?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Log Out', style: 'destructive', onPress: async () => { haptic.heavy(); await logout(); router.replace('/(auth)/login'); } },
-    ]);
+    openModal('logout');
   };
 
   const handleCurrencySelect = async (code: string) => {
@@ -53,11 +69,13 @@ export default function AccountScreen() {
     closeModal();
   };
 
-  const handleThemeSelect = async (label: string) => {
+  const handleThemeSelect = (label: string) => {
     haptic.selection();
-    const modeMap: Record<string, 'system' | 'light' | 'dark'> = { System: 'system', Light: 'light', Dark: 'dark' };
-    await setThemeMode(modeMap[label] || 'system');
     closeModal();
+    const modeMap: Record<string, 'system' | 'light' | 'dark'> = { System: 'system', Light: 'light', Dark: 'dark' };
+    setTimeout(() => {
+      setThemeMode(modeMap[label] || 'system');
+    }, 300);
   };
 
   const handleSaveProfile = async () => {
@@ -76,6 +94,67 @@ export default function AccountScreen() {
     setNotifications(val);
     Alert.alert(val ? 'Notifications Enabled' : 'Notifications Disabled',
       val ? 'You will receive expense and group notifications.' : 'Notifications have been turned off.');
+  };
+
+  const handleResendVerification = async () => {
+    setVerificationSending(true);
+    const result = await sendVerificationEmail();
+    setVerificationSending(false);
+    if (result.success) {
+      haptic.success();
+      Alert.alert('Email sent', 'Check your inbox for the verification link.');
+    } else {
+      haptic.error();
+      Alert.alert('Error', result.error || 'Failed to send.');
+    }
+  };
+
+  const handleChangePasswordSubmit = async () => {
+    setPasswordError('');
+    if (!currentPassword) {
+      setPasswordError('Enter your current password.');
+      return;
+    }
+    if (newPassword.length < 6) {
+      setPasswordError('New password must be at least 6 characters.');
+      return;
+    }
+    if (newPassword !== confirmNewPassword) {
+      setPasswordError('New passwords do not match.');
+      return;
+    }
+    setChangePasswordLoading(true);
+    const result = await changePassword(currentPassword, newPassword);
+    setChangePasswordLoading(false);
+    if (result.success) {
+      haptic.success();
+      Alert.alert('Password updated', 'Your password has been changed.');
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmNewPassword('');
+      closeModal();
+    } else {
+      haptic.error();
+      setPasswordError(result.error || 'Failed to change password.');
+    }
+  };
+
+  const handleDeleteAccountSubmit = async () => {
+    setPasswordError('');
+    if (!deletePassword) {
+      setPasswordError('Enter your password to confirm.');
+      return;
+    }
+    setDeleteAccountLoading(true);
+    const result = await deleteAccount(deletePassword);
+    setDeleteAccountLoading(false);
+    if (result.success) {
+      haptic.heavy();
+      router.replace('/(auth)/login');
+    } else {
+      haptic.error();
+      setPasswordError(result.error || 'Failed to delete account.');
+    }
   };
 
   const filteredCurrencies = currencySearch.trim()
@@ -102,18 +181,49 @@ export default function AccountScreen() {
     </TouchableOpacity>
   );
 
-  const ModalWrapper = ({ visible, title, children }: { visible: boolean; title: string; children: React.ReactNode }) => (
+  const ModalWrapper = ({
+    visible,
+    title,
+    children,
+    onOverlayPress,
+  }: {
+    visible: boolean;
+    title: string;
+    children: React.ReactNode;
+    onOverlayPress?: () => void;
+  }) => (
     <Modal visible={visible} animationType="slide" transparent statusBarTranslucent>
       <View style={[styles.modalOverlay, { backgroundColor: colors.overlay }]}>
-        <View style={[styles.modalContent, { backgroundColor: colors.card, maxWidth: isWide ? 500 : width - 32 }]}>
-          <View style={styles.modalHeader}>
-            <Text style={[styles.modalTitle, { color: colors.text }]}>{title}</Text>
-            <TouchableOpacity onPress={closeModal} style={[styles.modalClose, { backgroundColor: colors.surfaceVariant }]}>
-              <MaterialIcons name="close" size={20} color={colors.textSecondary} />
-            </TouchableOpacity>
+        {onOverlayPress ? (
+          <>
+            <TouchableWithoutFeedback onPress={onOverlayPress}>
+              <View style={StyleSheet.absoluteFill} />
+            </TouchableWithoutFeedback>
+            <View style={[styles.modalContent, { backgroundColor: colors.card, maxWidth: isWide ? 500 : width - 32 }]}>
+              <TouchableWithoutFeedback onPress={() => {}}>
+                <View>
+                  <View style={styles.modalHeader}>
+                    <Text style={[styles.modalTitle, { color: colors.text }]}>{title}</Text>
+                    <TouchableOpacity onPress={closeModal} style={[styles.modalClose, { backgroundColor: colors.surfaceVariant }]}>
+                      <MaterialIcons name="close" size={20} color={colors.textSecondary} />
+                    </TouchableOpacity>
+                  </View>
+                  {children}
+                </View>
+              </TouchableWithoutFeedback>
+            </View>
+          </>
+        ) : (
+          <View style={[styles.modalContent, { backgroundColor: colors.card, maxWidth: isWide ? 500 : width - 32 }]}>
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: colors.text }]}>{title}</Text>
+              <TouchableOpacity onPress={closeModal} style={[styles.modalClose, { backgroundColor: colors.surfaceVariant }]}>
+                <MaterialIcons name="close" size={20} color={colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+            {children}
           </View>
-          {children}
-        </View>
+        )}
       </View>
     </Modal>
   );
@@ -138,6 +248,29 @@ export default function AccountScreen() {
         </TouchableOpacity>
       </View>
 
+      {/* Email verification banner */}
+      {user && !emailVerified && (
+        <View style={[styles.verifyBanner, { backgroundColor: colors.warning + '20', borderColor: colors.warning }]}>
+          <MaterialIcons name="mark-email-unread" size={22} color={colors.warning} />
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.verifyBannerTitle, { color: colors.text }]}>Verify your email</Text>
+            <Text style={[styles.verifyBannerSub, { color: colors.textSecondary }]}>
+              We sent a link to {user.email}. Click it to verify.
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={[styles.verifyResendBtn, { backgroundColor: colors.warning }]}
+            onPress={handleResendVerification}
+            disabled={verificationSending}
+          >
+            <Text style={styles.verifyResendText}>{verificationSending ? 'Sending…' : 'Resend'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => refreshEmailVerified()} style={{ padding: 8 }}>
+            <MaterialIcons name="refresh" size={20} color={colors.textSecondary} />
+          </TouchableOpacity>
+        </View>
+      )}
+
       {/* Preferences */}
       <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.borderLight }]}>
         <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>PREFERENCES</Text>
@@ -154,9 +287,33 @@ export default function AccountScreen() {
       {/* Features */}
       <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.borderLight }]}>
         <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>FEATURES</Text>
+        <MenuItem icon="receipt-long" label="Personal expenses" onPress={() => router.push('/expense/personal')} />
         <MenuItem icon="bar-chart" label="Charts & Reports" onPress={() => router.push('/charts')} />
         <MenuItem icon="search" label="Search Expenses" onPress={() => router.push('/search')} />
       </View>
+
+      {/* Keyboard shortcuts (web) */}
+      {Platform.OS === 'web' && (
+        <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.borderLight }]}>
+          <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>KEYBOARD SHORTCUTS</Text>
+          <View style={styles.shortcutRow}>
+            <Text style={[styles.shortcutKey, { color: colors.textTertiary }]}>⌘ / Ctrl + K</Text>
+            <Text style={[styles.shortcutLabel, { color: colors.text }]}>Search</Text>
+          </View>
+          <View style={styles.shortcutRow}>
+            <Text style={[styles.shortcutKey, { color: colors.textTertiary }]}>⌘ / Ctrl + N</Text>
+            <Text style={[styles.shortcutLabel, { color: colors.text }]}>New expense</Text>
+          </View>
+          <View style={styles.shortcutRow}>
+            <Text style={[styles.shortcutKey, { color: colors.textTertiary }]}>⌘ / Ctrl + 1–4</Text>
+            <Text style={[styles.shortcutLabel, { color: colors.text }]}>Switch tab (Friends, Groups, Activity, Account)</Text>
+          </View>
+          <View style={styles.shortcutRow}>
+            <Text style={[styles.shortcutKey, { color: colors.textTertiary }]}>Esc</Text>
+            <Text style={[styles.shortcutLabel, { color: colors.text }]}>Back / close</Text>
+          </View>
+        </View>
+      )}
 
       {/* Support */}
       <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.borderLight }]}>
@@ -165,11 +322,23 @@ export default function AccountScreen() {
         <MenuItem icon="info-outline" label="About" value="v1.0.0" onPress={() => openModal('about')} />
         <MenuItem icon="privacy-tip" label="Privacy Policy" onPress={() => openModal('privacy')} />
         <MenuItem icon="description" label="Terms of Service" onPress={() => openModal('terms')} />
+        {hasPasswordProvider && (
+          <MenuItem icon="lock" label="Change password" onPress={() => { setPasswordError(''); setCurrentPassword(''); setNewPassword(''); setConfirmNewPassword(''); openModal('changePassword'); }} />
+        )}
       </View>
 
-      {/* Logout */}
+      {/* Log out */}
       <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.borderLight }]}>
         <MenuItem icon="logout" label="Log Out" onPress={handleLogout} isDestructive />
+        {hasPasswordProvider && (
+          <MenuItem icon="delete-forever" label="Delete account" onPress={() => {
+            haptic.warning();
+            Alert.alert('Delete account?', 'This will permanently delete your account and data. This cannot be undone.', [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Continue', style: 'destructive', onPress: () => { setPasswordError(''); setDeletePassword(''); openModal('deleteAccount'); } },
+            ]);
+          }} isDestructive />
+        )}
       </View>
 
       <View style={{ height: 100 }} />
@@ -394,6 +563,106 @@ export default function AccountScreen() {
           ))}
         </ScrollView>
       </ModalWrapper>
+
+      {/* Change password */}
+      <ModalWrapper visible={activeModal === 'changePassword'} title="Change password">
+        <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>Current password</Text>
+        <TextInput
+          style={[styles.profileInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.surface },
+            Platform.OS === 'web' ? { outlineStyle: 'none' } as any : {}]}
+          placeholder="Enter current password"
+          placeholderTextColor={colors.textTertiary}
+          value={currentPassword}
+          onChangeText={(t) => { setCurrentPassword(t); setPasswordError(''); }}
+          secureTextEntry
+        />
+        <Text style={[styles.fieldLabel, { color: colors.textSecondary, marginTop: 12 }]}>New password</Text>
+        <TextInput
+          style={[styles.profileInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.surface },
+            Platform.OS === 'web' ? { outlineStyle: 'none' } as any : {}]}
+          placeholder="At least 6 characters"
+          placeholderTextColor={colors.textTertiary}
+          value={newPassword}
+          onChangeText={(t) => { setNewPassword(t); setPasswordError(''); }}
+          secureTextEntry
+        />
+        <Text style={[styles.fieldLabel, { color: colors.textSecondary, marginTop: 12 }]}>Confirm new password</Text>
+        <TextInput
+          style={[styles.profileInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.surface },
+            Platform.OS === 'web' ? { outlineStyle: 'none' } as any : {}]}
+          placeholder="Re-enter new password"
+          placeholderTextColor={colors.textTertiary}
+          value={confirmNewPassword}
+          onChangeText={(t) => { setConfirmNewPassword(t); setPasswordError(''); }}
+          secureTextEntry
+        />
+        {passwordError ? <Text style={[styles.hintText, { color: colors.error, marginTop: 8 }]}>{passwordError}</Text> : null}
+        <View style={styles.modalBtnRow}>
+          <TouchableOpacity style={[styles.modalBtn, { backgroundColor: colors.surfaceVariant }]} onPress={closeModal}>
+            <Text style={[styles.modalBtnText, { color: colors.text }]}>Cancel</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.modalBtn, { backgroundColor: colors.primary }]}
+            onPress={handleChangePasswordSubmit}
+            disabled={changePasswordLoading}
+          >
+            <Text style={[styles.modalBtnText, { color: '#FFF' }]}>{changePasswordLoading ? 'Updating…' : 'Update password'}</Text>
+          </TouchableOpacity>
+        </View>
+      </ModalWrapper>
+
+      {/* Delete account */}
+      <ModalWrapper visible={activeModal === 'deleteAccount'} title="Delete account">
+        <Text style={[styles.infoText, { color: colors.textSecondary }]}>
+          This will permanently delete your account and data. This cannot be undone.
+        </Text>
+        <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>Enter your password to confirm</Text>
+        <TextInput
+          style={[styles.profileInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.surface },
+            Platform.OS === 'web' ? { outlineStyle: 'none' } as any : {}]}
+          placeholder="Your password"
+          placeholderTextColor={colors.textTertiary}
+          value={deletePassword}
+          onChangeText={(t) => { setDeletePassword(t); setPasswordError(''); }}
+          secureTextEntry
+        />
+        {passwordError ? <Text style={[styles.hintText, { color: colors.error, marginTop: 8 }]}>{passwordError}</Text> : null}
+        <View style={styles.modalBtnRow}>
+          <TouchableOpacity style={[styles.modalBtn, { backgroundColor: colors.surfaceVariant }]} onPress={closeModal}>
+            <Text style={[styles.modalBtnText, { color: colors.text }]}>Cancel</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.modalBtn, { backgroundColor: colors.error }]}
+            onPress={handleDeleteAccountSubmit}
+            disabled={deleteAccountLoading}
+          >
+            <Text style={[styles.modalBtnText, { color: '#FFF' }]}>{deleteAccountLoading ? 'Deleting…' : 'Delete account'}</Text>
+          </TouchableOpacity>
+        </View>
+      </ModalWrapper>
+
+      {/* Log out confirmation */}
+      <ModalWrapper visible={activeModal === 'logout'} title="Log out" onOverlayPress={closeModal}>
+        <Text style={[styles.infoText, { color: colors.textSecondary }]}>
+          Are you sure you want to log out? You can sign back in anytime.
+        </Text>
+        <View style={styles.modalBtnRow}>
+          <TouchableOpacity
+            style={[styles.modalBtn, { backgroundColor: colors.surfaceVariant }]}
+            onPress={closeModal}
+            disabled={logoutLoading}
+          >
+            <Text style={[styles.modalBtnText, { color: colors.text }]}>Cancel</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.modalBtn, { backgroundColor: colors.error }]}
+            onPress={runLogout}
+            disabled={logoutLoading}
+          >
+            <Text style={[styles.modalBtnText, { color: '#FFF' }]}>{logoutLoading ? 'Logging out…' : 'Log out'}</Text>
+          </TouchableOpacity>
+        </View>
+      </ModalWrapper>
     </ScrollView>
   );
 }
@@ -405,8 +674,25 @@ const styles = StyleSheet.create({
   profileName: { fontSize: 20, fontWeight: '700' },
   profileEmail: { fontSize: 14, marginTop: 2 },
   editButton: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  verifyBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 16,
+    marginBottom: 16,
+    padding: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    gap: 10,
+  },
+  verifyBannerTitle: { fontSize: 15, fontWeight: '700' },
+  verifyBannerSub: { fontSize: 13, marginTop: 2 },
+  verifyResendBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8 },
+  verifyResendText: { color: '#FFF', fontSize: 13, fontWeight: '600' },
   section: { marginHorizontal: 16, marginBottom: 16, borderRadius: 16, borderWidth: 1, overflow: 'hidden' },
   sectionTitle: { fontSize: 12, fontWeight: '600', letterSpacing: 0.8, padding: 16, paddingBottom: 4 },
+  shortcutRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 10, gap: 12 },
+  shortcutKey: { fontSize: 13, fontFamily: Platform.OS === 'web' ? 'monospace' : undefined, minWidth: 48 },
+  shortcutLabel: { fontSize: 14, flex: 1 },
   menuItem: { flexDirection: 'row', alignItems: 'center', padding: 14, borderBottomWidth: 0.5 },
   menuIcon: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   menuContent: { flex: 1, marginLeft: 12 },

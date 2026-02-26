@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { Group, Balance, DebtSimplification } from '@/types';
 import * as db from '@/services/database';
+import { useAuthStore } from '@/stores/useAuthStore';
 
 interface GroupState {
   groups: Group[];
@@ -59,6 +60,19 @@ export const useGroupStore = create<GroupState>((set, get) => ({
     const created = await db.createGroup(group);
     const { groups } = get();
     set({ groups: [created, ...groups] });
+    const currentUser = useAuthStore.getState().user;
+    if (currentUser && created.members.length > 0) {
+      try {
+        await db.createActivity({
+          type: 'group_created',
+          description: `Created group: ${created.name}`,
+          groupId: created.id,
+          groupName: created.name,
+          createdBy: currentUser.id,
+          createdByName: currentUser.name,
+        });
+      } catch (_) {}
+    }
     return created;
   },
 
@@ -80,12 +94,43 @@ export const useGroupStore = create<GroupState>((set, get) => ({
   },
 
   addMember: async (groupId, member) => {
-    const added = await db.addGroupMember(groupId, member);
+    await db.addGroupMember(groupId, member);
     await get().fetchGroup(groupId);
+    const currentUser = useAuthStore.getState().user;
+    const group = get().currentGroup;
+    if (currentUser && group) {
+      try {
+        await db.createActivity({
+          type: 'member_added',
+          description: `Added ${member.name} to group: ${group.name}`,
+          groupId,
+          groupName: group.name,
+          createdBy: currentUser.id,
+          createdByName: currentUser.name,
+        });
+      } catch (_) {}
+    }
   },
 
   removeMember: async (groupId, memberId) => {
+    const group = get().currentGroup;
+    const member = group?.members.find((m) => m.id === memberId);
+    if (!member) return;
     await db.removeGroupMember(groupId, memberId);
     await get().fetchGroup(groupId);
+    const currentUser = useAuthStore.getState().user;
+    const groupName = group?.name ?? 'group';
+    if (currentUser) {
+      try {
+        await db.createActivity({
+          type: 'member_removed',
+          description: `Removed ${member.name} from group: ${groupName}`,
+          groupId,
+          groupName: group?.name ?? undefined,
+          createdBy: currentUser.id,
+          createdByName: currentUser.name,
+        });
+      } catch (_) {}
+    }
   },
 }));

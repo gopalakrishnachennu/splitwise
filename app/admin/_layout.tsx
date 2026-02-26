@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
   useWindowDimensions, Platform, TextInput, KeyboardAvoidingView,
@@ -6,8 +6,8 @@ import {
 import { Slot, router, usePathname } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useThemeColors, useDeviceType } from '@/utils/hooks';
-import { verifyAdminAccess } from '@/services/admin';
 import { haptic } from '@/utils/haptics';
+import { useAuthStore } from '@/stores/useAuthStore';
 
 const NAV_ITEMS = [
   { key: '/admin', icon: 'dashboard', label: 'Dashboard' },
@@ -17,23 +17,28 @@ const NAV_ITEMS = [
   { key: '/admin/analytics', icon: 'insights', label: 'Analytics' },
   { key: '/admin/activity-log', icon: 'history', label: 'Activity Log' },
   { key: '/admin/system', icon: 'memory', label: 'System' },
+  { key: '/admin/settings', icon: 'settings', label: 'Settings' },
 ] as const;
 
-function AdminLogin({ onSuccess }: { onSuccess: () => void }) {
+function AdminLogin() {
   const colors = useThemeColors();
-  const [code, setCode] = useState('');
+  const { login } = useAuthStore();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const handleLogin = () => {
-    if (verifyAdminAccess(code)) {
-      haptic.success();
-      setError('');
-      onSuccess();
-    } else {
+  const handleEmailLogin = async () => {
+    setError('');
+    setLoading(true);
+    const result = await login(email.trim(), password);
+    setLoading(false);
+    if (!result.success) {
       haptic.error();
-      setError('Invalid access code');
-      setCode('');
+      setError(result.error || 'Login failed');
+      return;
     }
+    haptic.success();
   };
 
   return (
@@ -43,24 +48,40 @@ function AdminLogin({ onSuccess }: { onSuccess: () => void }) {
           <MaterialIcons name="admin-panel-settings" size={48} color="#5BC5A7" />
         </View>
         <Text style={styles.loginTitle}>Admin Panel</Text>
-        <Text style={styles.loginSubtitle}>Enter your access code to continue</Text>
+        <Text style={styles.loginSubtitle}>Sign in with an admin account</Text>
 
         <TextInput
           style={[styles.loginInput, error ? styles.loginInputError : null,
             Platform.OS === 'web' ? { outlineStyle: 'none' } as any : {}]}
-          placeholder="Access code"
+          placeholder="Admin email"
+          placeholderTextColor="#555"
+          autoCapitalize="none"
+          keyboardType="email-address"
+          value={email}
+          onChangeText={(t) => { setEmail(t); setError(''); }}
+          autoFocus
+        />
+
+        <TextInput
+          style={[styles.loginInput, error ? styles.loginInputError : null,
+            Platform.OS === 'web' ? { outlineStyle: 'none' } as any : {}]}
+          placeholder="Password"
           placeholderTextColor="#555"
           secureTextEntry
-          value={code}
-          onChangeText={(t) => { setCode(t); setError(''); }}
-          onSubmitEditing={handleLogin}
-          autoFocus
+          value={password}
+          onChangeText={(t) => { setPassword(t); setError(''); }}
+          onSubmitEditing={handleEmailLogin}
         />
 
         {error ? <Text style={styles.loginError}>{error}</Text> : null}
 
-        <TouchableOpacity style={styles.loginBtn} onPress={handleLogin} activeOpacity={0.8}>
-          <Text style={styles.loginBtnText}>Sign In</Text>
+        <TouchableOpacity
+          style={[styles.loginBtn, loading && { opacity: 0.7 }]}
+          onPress={handleEmailLogin}
+          activeOpacity={0.8}
+          disabled={loading}
+        >
+          <Text style={styles.loginBtnText}>{loading ? 'Signing In...' : 'Sign In'}</Text>
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.backLink} onPress={() => router.back()}>
@@ -78,11 +99,36 @@ export default function AdminLayout() {
   const pathname = usePathname();
   const { width } = useWindowDimensions();
   const isWide = deviceType !== 'phone';
-  const [authenticated, setAuthenticated] = useState(false);
+  const { user, isAuthenticated, logout } = useAuthStore();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
-  if (!authenticated) {
-    return <AdminLogin onSuccess={() => setAuthenticated(true)} />;
+  const isAdmin = useMemo(() => (user?.role ?? 'user') === 'admin', [user?.role]);
+
+  if (!isAuthenticated) return <AdminLogin />;
+  if (!isAdmin) {
+    return (
+      <View style={[styles.deniedWrap, { backgroundColor: colors.background }]}>
+        <MaterialIcons name="block" size={40} color={colors.error} />
+        <Text style={[styles.deniedTitle, { color: colors.text }]}>Access denied</Text>
+        <Text style={[styles.deniedSub, { color: colors.textSecondary }]}>
+          This account is not an admin.
+        </Text>
+        {user && (
+          <Text style={[styles.deniedDebug, { color: colors.textTertiary }]}>
+            Debug: userId={user.id} · role={user.role ?? 'user'}
+          </Text>
+        )}
+        <TouchableOpacity
+          style={[styles.deniedBtn, { backgroundColor: colors.primary }]}
+          onPress={async () => { await logout(); router.replace('/(auth)/login'); }}
+        >
+          <Text style={styles.deniedBtnText}>Switch account</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.backLink} onPress={() => router.back()}>
+          <Text style={[styles.backLinkText, { color: colors.textSecondary }]}>Back to app</Text>
+        </TouchableOpacity>
+      </View>
+    );
   }
 
   const sidebarWidth = sidebarCollapsed ? 64 : 240;
@@ -159,7 +205,7 @@ export default function AdminLayout() {
 
         <TouchableOpacity
           style={[styles.sidebarItem, { marginBottom: 16 }]}
-          onPress={() => { setAuthenticated(false); router.back(); }}
+          onPress={async () => { await logout(); router.back(); }}
         >
           <MaterialIcons name="exit-to-app" size={20} color="#FF6B6B" />
           {!sidebarCollapsed && <Text style={[styles.sidebarLabel, { color: '#FF6B6B' }]}>Logout</Text>}
@@ -250,6 +296,12 @@ const styles = StyleSheet.create({
     color: '#8892b0',
     fontSize: 14,
   },
+  deniedWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 10 },
+  deniedTitle: { fontSize: 20, fontWeight: '800', marginTop: 6 },
+  deniedSub: { fontSize: 14, textAlign: 'center', marginBottom: 10 },
+  deniedDebug: { fontSize: 12, textAlign: 'center', marginBottom: 6 },
+  deniedBtn: { paddingHorizontal: 16, paddingVertical: 12, borderRadius: 10, marginTop: 6 },
+  deniedBtnText: { color: '#FFF', fontWeight: '700' },
   // Sidebar
   sidebar: {
     borderRightWidth: 1,

@@ -89,8 +89,8 @@ export default function SignupScreen() {
           />
 
           <Input
-            label="Gmail Address *"
-            placeholder="yourname@gmail.com"
+            label="Email Address *"
+            placeholder="your@email.com"
             value={email}
             onChangeText={(t) => { setEmail(t); setError(''); }}
             keyboardType="email-address"

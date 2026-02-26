@@ -5,7 +5,8 @@ import {
 } from 'react-native';
 import { router } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
-import { v4 as uuidv4 } from 'uuid';
+import * as Crypto from 'expo-crypto';
+const uuidv4 = (): string => Crypto.randomUUID();
 import { useGroupStore } from '@/stores/useGroupStore';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useFriendStore } from '@/stores/useFriendStore';
@@ -30,6 +31,7 @@ export default function CreateGroupScreen() {
   const user = useAuthStore((s) => s.user);
   const { createGroup } = useGroupStore();
   const { friends } = useFriendStore();
+  const linkedFriends = friends.filter((f) => (f.status ?? 'linked') === 'linked');
 
   const [name, setName] = useState('');
   const [type, setType] = useState<GroupType>('other');
@@ -161,10 +163,10 @@ export default function CreateGroupScreen() {
           ))}
         </View>
 
-        {friends.length > 0 && (
+        {linkedFriends.length > 0 && (
           <View style={styles.section}>
             <Text style={[styles.label, { color: colors.textSecondary }]}>Add Friends</Text>
-            {friends.map((friend) => (
+            {linkedFriends.map((friend) => (
               <TouchableOpacity
                 key={friend.id}
                 style={[styles.friendRow, { borderBottomColor: colors.borderLight }]}

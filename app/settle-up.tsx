@@ -14,6 +14,7 @@ import { Avatar } from '@/components/Avatar';
 import { Input } from '@/components/Input';
 import { Button } from '@/components/Button';
 import { formatCurrency } from '@/constants/Currencies';
+import { sanitizeDecimalInput } from '@/utils/validation';
 
 export default function SettleUpScreen() {
   const colors = useThemeColors();
@@ -36,9 +37,9 @@ export default function SettleUpScreen() {
   const handleSettle = async () => {
     if (!friend || !user) return;
     const settleAmount = parseFloat(amount);
-    if (!settleAmount || settleAmount <= 0) {
+    if (!amount.trim() || Number.isNaN(settleAmount) || settleAmount <= 0) {
       haptic.error();
-      Alert.alert('Error', 'Please enter a valid amount');
+      Alert.alert('Error', 'Please enter a valid amount (numbers only).');
       return;
     }
 
@@ -126,7 +127,7 @@ export default function SettleUpScreen() {
               label="Amount"
               placeholder="0.00"
               value={amount}
-              onChangeText={setAmount}
+              onChangeText={(t) => setAmount(sanitizeDecimalInput(t))}
               keyboardType="decimal-pad"
               prefix="$"
               leftIcon="attach-money"

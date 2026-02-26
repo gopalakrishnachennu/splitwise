@@ -1,3 +1,5 @@
+export type UserRole = 'user' | 'admin';
+
 export interface User {
   id: string;
   email: string;
@@ -6,6 +8,7 @@ export interface User {
   avatarUrl?: string;
   defaultCurrency: string;
   createdAt: string;
+  role?: UserRole;
 }
 
 export interface Friend {
@@ -13,13 +16,19 @@ export interface Friend {
   userId: string;
   friendId: string;
   friendName: string;
-  friendEmail: string;
+  friendEmail?: string;
   friendPhone?: string;
   friendAvatarUrl?: string;
   balance: number;
   currency: string;
   createdAt: string;
+  /** Linked = existing app user; Invited = pending contact (not yet an app user). */
+  status?: 'linked' | 'invited';
+  inviteEmail?: string;
+  invitePhone?: string;
 }
+
+export type GroupDefaultSplitType = 'equal' | 'exact' | 'percentage' | 'shares';
 
 export interface Group {
   id: string;
@@ -31,6 +40,10 @@ export interface Group {
   defaultCurrency: string;
   createdAt: string;
   updatedAt: string;
+  /** Optional default split configuration applied when adding new expenses in this group. */
+  defaultSplitType?: GroupDefaultSplitType;
+  /** Map of member userId -> value (percentage or shares depending on type). */
+  defaultSplitConfig?: Record<string, number>;
 }
 
 export type GroupType = 'home' | 'trip' | 'couple' | 'other';
@@ -62,6 +75,10 @@ export interface Expense {
   createdBy: string;
   createdAt: string;
   updatedAt: string;
+  /** Rate used to convert expense.currency → group.defaultCurrency (stored at creation/update). */
+  fxToGroupRate?: number;
+  /** When the FX rate was last fetched/stored. */
+  fxUpdatedAt?: string;
 }
 
 export interface ExpensePayer {
@@ -119,7 +136,8 @@ export type RecurringInterval = 'daily' | 'weekly' | 'biweekly' | 'monthly' | 'y
 
 export interface Activity {
   id: string;
-  type: 'expense_added' | 'expense_updated' | 'expense_deleted' | 'settlement' | 'group_created' | 'member_added' | 'member_removed';
+  type: 'expense_added' | 'expense_updated' | 'expense_deleted' | 'settlement' | 'group_created' | 'member_added' | 'member_removed'
+    | 'admin_user_deleted' | 'admin_group_deleted' | 'admin_expense_deleted' | 'admin_role_changed';
   description: string;
   amount?: number;
   currency?: string;

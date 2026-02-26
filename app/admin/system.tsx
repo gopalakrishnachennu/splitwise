@@ -68,11 +68,20 @@ export default function AdminSystemScreen() {
           text: 'Activate',
           style: 'destructive',
           onPress: async () => {
-            haptic.heavy();
-            const endTime = selectedDuration > 0
-              ? new Date(Date.now() + selectedDuration * 60000).toISOString()
-              : undefined;
-            await maintenance.activate(editMessage, endTime);
+            try {
+              haptic.heavy();
+              const endTime = selectedDuration > 0
+                ? new Date(Date.now() + selectedDuration * 60000).toISOString()
+                : undefined;
+              await maintenance.activate(editMessage, endTime);
+              Alert.alert('Maintenance activated', 'Regular users will now see the maintenance screen.');
+            } catch (err: any) {
+              console.error('Failed to activate maintenance', err);
+              Alert.alert(
+                'Activation failed',
+                err?.message || 'Could not activate maintenance mode. Please check Firestore rules and try again.'
+              );
+            }
           },
         },
       ]
@@ -89,8 +98,17 @@ export default function AdminSystemScreen() {
         {
           text: 'End Maintenance',
           onPress: async () => {
-            haptic.success();
-            await maintenance.deactivate();
+            try {
+              haptic.success();
+              await maintenance.deactivate();
+              Alert.alert('Maintenance ended', 'Normal access has been restored for all users.');
+            } catch (err: any) {
+              console.error('Failed to deactivate maintenance', err);
+              Alert.alert(
+                'End failed',
+                err?.message || 'Could not end maintenance mode. Please check Firestore rules and try again.'
+              );
+            }
           },
         },
       ]

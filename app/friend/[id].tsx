@@ -55,6 +55,9 @@ export default function FriendDetailScreen() {
     ]);
   };
 
+  const isInvited = (friend.status ?? 'linked') === 'invited';
+  const contactLine = friend.friendEmail || friend.inviteEmail || friend.friendPhone || friend.invitePhone || '';
+
   return (
     <>
       <Stack.Screen options={{ title: friend.friendName }} />
@@ -65,23 +68,44 @@ export default function FriendDetailScreen() {
         <View style={[styles.header, { backgroundColor: colors.primary + '08' }]}>
           <Avatar name={friend.friendName} size={80} />
           <Text style={[styles.name, { color: colors.text }]}>{friend.friendName}</Text>
-          <Text style={[styles.email, { color: colors.textSecondary }]}>{friend.friendEmail}</Text>
+          {contactLine ? (
+            <Text style={[styles.email, { color: colors.textSecondary }]}>{contactLine}</Text>
+          ) : null}
+
+          {isInvited && (
+            <View style={[styles.invitePill, { backgroundColor: colors.warning + '18', borderColor: colors.warning + '35' }]}>
+              <MaterialIcons name="schedule" size={16} color={colors.warning} />
+              <Text style={[styles.invitePillText, { color: colors.warning }]}>Invite pending</Text>
+            </View>
+          )}
 
           <View style={[styles.balanceCard, { backgroundColor: colors.card, borderColor: colors.borderLight }]}>
-            <Text style={[styles.balanceLabel, { color: colors.textSecondary }]}>Balance</Text>
-            <Text style={[
-              styles.balanceAmount,
-              { color: friend.balance >= 0 ? colors.positive : colors.negative },
-            ]}>
-              {friend.balance >= 0 ? '+' : ''}{formatCurrency(friend.balance, friend.currency)}
-            </Text>
-            <Text style={[styles.balanceSub, { color: colors.textTertiary }]}>
-              {friend.balance > 0
-                ? `${friend.friendName.split(' ')[0]} owes you`
-                : friend.balance < 0
-                ? `You owe ${friend.friendName.split(' ')[0]}`
-                : 'All settled up'}
-            </Text>
+            {isInvited ? (
+              <>
+                <Text style={[styles.balanceLabel, { color: colors.textSecondary }]}>Status</Text>
+                <Text style={[styles.balanceAmount, { color: colors.text }]}>Pending</Text>
+                <Text style={[styles.balanceSub, { color: colors.textTertiary }]}>
+                  They’ll appear as a linked friend once they create an account.
+                </Text>
+              </>
+            ) : (
+              <>
+                <Text style={[styles.balanceLabel, { color: colors.textSecondary }]}>Balance</Text>
+                <Text style={[
+                  styles.balanceAmount,
+                  { color: friend.balance >= 0 ? colors.positive : colors.negative },
+                ]}>
+                  {friend.balance >= 0 ? '+' : ''}{formatCurrency(friend.balance, friend.currency)}
+                </Text>
+                <Text style={[styles.balanceSub, { color: colors.textTertiary }]}>
+                  {friend.balance > 0
+                    ? `${friend.friendName.split(' ')[0]} owes you`
+                    : friend.balance < 0
+                    ? `You owe ${friend.friendName.split(' ')[0]}`
+                    : 'All settled up'}
+                </Text>
+              </>
+            )}
           </View>
         </View>
 
@@ -92,6 +116,7 @@ export default function FriendDetailScreen() {
             size="small"
             style={{ flex: 1 }}
             icon={<MaterialIcons name="handshake" size={18} color="#FFF" />}
+            disabled={isInvited}
           />
           <Button
             title="Add Expense"
@@ -100,6 +125,7 @@ export default function FriendDetailScreen() {
             size="small"
             style={{ flex: 1 }}
             icon={<MaterialIcons name="add" size={18} color={colors.primary} />}
+            disabled={isInvited}
           />
         </View>
 
@@ -145,6 +171,17 @@ const styles = StyleSheet.create({
   header: { alignItems: 'center', padding: 28 },
   name: { fontSize: 24, fontWeight: '800', marginTop: 16 },
   email: { fontSize: 14, marginTop: 4 },
+  invitePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    marginTop: 10,
+  },
+  invitePillText: { fontSize: 12, fontWeight: '700' },
   balanceCard: {
     marginTop: 20,
     padding: 20,
