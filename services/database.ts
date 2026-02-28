@@ -254,18 +254,22 @@ export const updateExpense = async (
   id: string,
   updates: Partial<Omit<Expense, 'id' | 'createdAt'>>
 ): Promise<Expense | null> => {
-  const existing = await getExpense(id);
-  if (!existing) return null;
   const now = new Date().toISOString();
   const patch: Record<string, unknown> = { ...updates, updatedAt: now };
   delete patch.id;
   delete patch.createdAt;
+
+  // Attempt the update; if the doc doesn't exist or rules fail, let the error propagate
+  // so the caller can surface a real error instead of a silent null.
   await updateDoc(doc(db, 'expenses', id), patch);
-  const groupId = updates.groupId ?? existing.groupId;
+
+  // Try to fetch the latest for return value and group updatedAt bookkeeping.
+  const existing = await getExpense(id);
+  const groupId = updates.groupId ?? existing?.groupId;
   if (groupId) {
     await updateDoc(doc(db, 'groups', groupId), { updatedAt: now }).catch(() => {});
   }
-  return { ...existing, ...updates, id, updatedAt: now } as Expense;
+  return existing ? ({ ...existing, ...updates, id, updatedAt: now } as Expense) : null;
 };
 
 export const getExpenses = async (groupId?: string): Promise<Expense[]> => {

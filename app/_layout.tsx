@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
+import { NetworkBanner } from '@/components/NetworkBanner';
+import { Toast } from '@/components/Toast';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useThemeStore } from '@/stores/useThemeStore';
 import { useThemeColors, useResolvedColorScheme } from '@/utils/hooks';
@@ -34,6 +36,8 @@ export default function RootLayout() {
   return (
     <>
       <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
+      <NetworkBanner />
+      <Toast />
       <Stack
         screenOptions={{
           headerStyle: { backgroundColor: theme.background },

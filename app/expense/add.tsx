@@ -5,7 +5,7 @@ import {
   Modal, TextInput, Image, Keyboard, Switch,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -87,12 +87,35 @@ export default function AddExpenseScreen() {
   const descriptionRef = useRef<TextInput>(null);
   const amountRef = useRef<TextInput>(null);
   const contactInputRef = useRef<TextInput>(null);
+  const navigation = useNavigation();
+
+  const [dirty, setDirty] = useState(false);
 
   const insets = useSafeAreaInsets();
   const isWide = deviceType !== 'phone';
   const contentMaxWidth = isWide ? 500 : width;
 
   useEffect(() => { fetchGroups(); }, []);
+
+  useEffect(() => {
+    const initial = JSON.stringify({
+      description: '',
+      amount: '',
+      notes: '',
+      isRecurring: false,
+      selectedGroupId: undefined,
+      currencyCode: 'USD',
+    });
+    const current = JSON.stringify({
+      description: description.trim(),
+      amount: amount.trim(),
+      notes: notes.trim(),
+      isRecurring,
+      selectedGroupId,
+      currencyCode,
+    });
+    setDirty(current !== initial && !loading);
+  }, [description, amount, notes, isRecurring, selectedGroupId, currencyCode, loading]);
 
   useFocusEffect(
     useCallback(() => {
@@ -356,8 +379,40 @@ export default function AddExpenseScreen() {
       }
     }
 
-    setLoading(true);
-    try {
+    const existingSimilar = useExpenseStore
+      .getState()
+      .expenses.find((e) => {
+        return (
+          e.description.trim().toLowerCase() === description.trim().toLowerCase() &&
+          e.amount === totalAmount &&
+          e.date === date &&
+          (e.groupId || null) === (selectedGroupId || null)
+        );
+      });
+
+    if (existingSimilar && !editId) {
+      Alert.alert(
+        'Possible duplicate',
+        'You already have an expense with the same description, amount, date, and group. Create anyway?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Create anyway',
+            style: 'default',
+            onPress: () => {
+              void (async () => {
+                await saveInternal();
+              })();
+            },
+          },
+        ],
+      );
+      return;
+    }
+
+    const saveInternal = async () => {
+      setLoading(true);
+      try {
       const payer = selectedMembers.find((m) => m.userId === payerId) || { userId: user.id, name: user.name };
       const paidBy: ExpensePayer[] = [{ userId: payer.userId, userName: payer.name, amount: totalAmount }];
       const groupCurrency = selectedGroup ? (selectedGroup.defaultCurrency || 'USD') : (user.defaultCurrency || 'USD');
@@ -392,28 +447,59 @@ export default function AddExpenseScreen() {
         ...(fxToGroupRate != null && { fxToGroupRate, fxUpdatedAt }),
       };
 
-      haptic.success();
       if (editId) {
         const existing = useExpenseStore.getState().currentExpense;
         const updates = { ...payload, createdBy: existing?.createdBy ?? user.id };
-        const updated = await updateExpense(editId, updates, user.name);
-        if (updated) router.back();
-        else Alert.alert('Error', 'Failed to update expense');
+        await updateExpense(editId, updates);
+        router.back();
       } else {
         await createExpense(payload, user.name);
         router.back();
       }
-    } catch {
+    } catch (e) {
+      console.error('Failed to save expense', e);
       Alert.alert('Error', editId ? 'Failed to update expense' : 'Failed to add expense');
     } finally {
       setLoading(false);
     }
+    };
+
+    await saveInternal();
   };
 
   const selectContact = (item: { type: 'group' | 'friend'; id: string; name: string }) => {
     haptic.selection();
     if (item.type === 'group') {
       setSelectedGroupId(item.id);
+    } else if (item.type === 'friend') {
+      // Personal expense with an individual friend.
+      setSelectedGroupId(undefined);
+      const friend = friends.find((f) => f.id === item.id);
+      if (!friend || !user) {
+        setShowContactSearch(false);
+        setContactQuery('');
+        return;
+      }
+
+      setSelectedMembers((prev) => {
+        // Ensure \"you\" are always included.
+        const base = prev.length
+          ? prev
+          : [{ id: 'self', userId: user.id, name: user.name, email: user.email || '' }];
+
+        const exists = base.some((m) => m.userId === friend.friendId);
+        if (exists) return base;
+
+        return [
+          ...base,
+          {
+            id: friend.id,
+            userId: friend.friendId,
+            name: friend.friendName,
+            email: friend.friendEmail,
+          },
+        ];
+      });
     }
     setShowContactSearch(false);
     setContactQuery('');
@@ -422,6 +508,14 @@ export default function AddExpenseScreen() {
   const removeGroup = () => {
     haptic.light();
     setSelectedGroupId(undefined);
+  };
+
+  const removeMember = (userId: string) => {
+    haptic.light();
+    setSelectedMembers((prev) => prev.filter((m) => m.userId !== userId));
+    if (payerId === userId && user) {
+      setPayerId(user.id);
+    }
   };
 
   const onSplitTabSelect = (tab: SplitTab) => {
@@ -439,7 +533,28 @@ export default function AddExpenseScreen() {
 
   const renderTopBar = () => (
     <View style={[s.topBar, { borderBottomColor: colors.border, paddingTop: insets.top + 8 }]}>
-      <TouchableOpacity onPress={() => router.back()} style={s.topBarBtn} hitSlop={8}>
+      <TouchableOpacity
+        onPress={() => {
+          if (dirty && !editId) {
+            Alert.alert(
+              'Discard changes?',
+              'You have unsaved changes. Are you sure you want to close?',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Discard',
+                  style: 'destructive',
+                  onPress: () => router.back(),
+                },
+              ],
+            );
+          } else {
+            router.back();
+          }
+        }}
+        style={s.topBarBtn}
+        hitSlop={8}
+      >
         <MaterialIcons name="close" size={26} color={colors.text} />
       </TouchableOpacity>
       <Text style={[s.topBarTitle, { color: colors.text }]}>{editId ? 'Edit expense' : 'Add an expense'}</Text>
@@ -466,6 +581,22 @@ export default function AddExpenseScreen() {
             </TouchableOpacity>
           </View>
         )}
+        {!selectedGroup && selectedMembers
+          .filter((m) => m.userId !== user?.id)
+          .map((m) => (
+            <View
+              key={m.userId}
+              style={[s.groupChip, { backgroundColor: colors.surfaceVariant, borderColor: colors.border }]}
+            >
+              <MaterialIcons name="person" size={14} color={colors.textSecondary} />
+              <Text style={[s.groupChipText, { color: colors.text }]} numberOfLines={1}>
+                {m.name}
+              </Text>
+              <TouchableOpacity onPress={() => removeMember(m.userId)} hitSlop={6}>
+                <MaterialIcons name="close" size={16} color={colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+          ))}
         <TextInput
           ref={contactInputRef}
           style={[s.withInput, { color: colors.text }]}
@@ -474,6 +605,14 @@ export default function AddExpenseScreen() {
           value={contactQuery}
           onChangeText={(t) => { setContactQuery(t); setShowContactSearch(true); }}
           onFocus={() => setShowContactSearch(true)}
+          onPressIn={() => setShowContactSearch(true)}
+          onBlur={() => setShowContactSearch(false)}
+          autoCorrect={false}
+          autoCapitalize="none"
+          autoComplete="off"
+          keyboardType={Platform.OS === 'web' ? 'default' : 'name-phone-pad'}
+          textContentType="none"
+          importantForAutofill="no"
         />
       </View>
       {showContactSearch && (
@@ -527,6 +666,8 @@ export default function AddExpenseScreen() {
         returnKeyType="next"
         onSubmitEditing={() => amountRef.current?.focus()}
         onFocus={() => setShowContactSearch(false)}
+        autoCapitalize="sentences"
+        autoCorrect
       />
 
       <View style={[s.amountRow, { borderBottomColor: colors.border }]}>
@@ -540,6 +681,7 @@ export default function AddExpenseScreen() {
           onChangeText={(t) => setAmount(sanitizeDecimalInput(t))}
           keyboardType="decimal-pad"
           onFocus={() => setShowContactSearch(false)}
+          returnKeyType="done"
         />
         <TouchableOpacity
           style={[s.currencyChip, { borderColor: colors.border, backgroundColor: colors.surfaceVariant }]}
@@ -1173,6 +1315,7 @@ value={customShares[m.userId] || ''}
       {renderCurrencyModal()}
       {renderNotesModal()}
       {renderDateModal()}
+      {renderRecurringModal()}
     </KeyboardAvoidingView>
   );
 }

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   KeyboardAvoidingView, Platform, Alert, useWindowDimensions,
@@ -40,6 +40,7 @@ export default function CreateGroupScreen() {
   const [memberName, setMemberName] = useState('');
   const [memberContact, setMemberContact] = useState('');
   const [manualMembers, setManualMembers] = useState<GroupMember[]>([]);
+  const [dirty, setDirty] = useState(false);
 
   const isWide = deviceType !== 'phone';
   const contentMaxWidth = isWide ? 600 : width;
@@ -75,6 +76,17 @@ export default function CreateGroupScreen() {
     setMemberName('');
     setMemberContact('');
   };
+
+  useEffect(() => {
+    const hasChanges =
+      name.trim().length > 0 ||
+      selectedFriends.size > 0 ||
+      memberName.trim().length > 0 ||
+      memberContact.trim().length > 0 ||
+      manualMembers.length > 0 ||
+      type !== 'other';
+    setDirty(hasChanges);
+  }, [name, selectedFriends, memberName, memberContact, manualMembers, type]);
 
   const handleCreate = async () => {
     if (!name.trim()) { haptic.error(); Alert.alert('Error', 'Please enter a group name'); return; }
@@ -247,6 +259,30 @@ export default function CreateGroupScreen() {
             fullWidth
             size="large"
           />
+          <View style={{ marginTop: 8 }}>
+            <Button
+              title="Cancel"
+              variant="ghost"
+              onPress={() => {
+                if (dirty) {
+                  Alert.alert(
+                    'Discard changes?',
+                    'You have unsaved changes. Are you sure you want to close?',
+                    [
+                      { text: 'Keep editing', style: 'cancel' },
+                      {
+                        text: 'Discard',
+                        style: 'destructive',
+                        onPress: () => router.back(),
+                      },
+                    ],
+                  );
+                } else {
+                  router.back();
+                }
+              }}
+            />
+          </View>
         </View>
       </View>
     </KeyboardAvoidingView>

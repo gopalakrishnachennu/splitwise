@@ -59,41 +59,63 @@ export default function ReceiptScanScreen() {
     }
     const pickerResult = useCamera
       ? await ImagePicker.launchCameraAsync({
-          mediaTypes: ['images'],
-          quality: 0.8,
-          allowsEditing: true,
-        })
+        mediaTypes: ['images'],
+        quality: 0.8,
+        allowsEditing: true,
+      })
       : await ImagePicker.launchImageLibraryAsync({
-          mediaTypes: ['images'],
-          quality: 0.8,
-          allowsEditing: true,
-        });
+        mediaTypes: ['images'],
+        quality: 0.8,
+        allowsEditing: true,
+      });
     if (!pickerResult.canceled && pickerResult.assets[0]) {
       haptic.success();
-      setImageUri(pickerResult.assets[0].uri);
+      const uri = pickerResult.assets[0].uri;
+      setImageUri(uri);
       setResult(null);
+      autoScan(uri);
     }
   }, []);
 
-  const runScan = useCallback(async () => {
-    if (!imageUri) return;
+  const handleScanResult = useCallback((scanResult: ReceiptScanResult) => {
+    setResult(scanResult);
+    setMerchant(scanResult.merchant || '');
+    setItems(
+      scanResult.items.map((i) => ({
+        ...i,
+        id: i.id || `item-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      })),
+    );
+    setTotal(scanResult.total != null ? String(scanResult.total) : '');
+    haptic.success();
+  }, []);
+
+  const handleScanError = useCallback((e: any) => {
+    console.warn('Receipt scan error:', e);
+    const msg = typeof e?.message === 'string' ? e.message : 'Unknown error';
+    // Show the actual error message — receiptScan.ts now has specific messages
+    // for each failure case (API key, timeout, parsing, HTTP errors)
+    setError(msg);
+    haptic.error();
+  }, []);
+
+  const autoScan = useCallback(async (uri: string) => {
     setScanning(true);
     setError(null);
     try {
-      const scanResult = await scanReceipt(imageUri);
-      setResult(scanResult);
-      setMerchant(scanResult.merchant || '');
-      setItems(scanResult.items.map((i) => ({ ...i, id: i.id || `item-${Date.now()}-${Math.random().toString(36).slice(2)}` })));
-      setTotal(scanResult.total != null ? String(scanResult.total) : '');
-      haptic.success();
-    } catch (e) {
-      console.warn(e);
-      setError('Could not extract text from this receipt. Try a clearer photo or add the expense manually.');
-      haptic.error();
+      const scanResult = await scanReceipt(uri);
+      handleScanResult(scanResult);
+    } catch (e: any) {
+      handleScanError(e);
     } finally {
       setScanning(false);
     }
-  }, [imageUri]);
+  }, [handleScanResult, handleScanError]);
+
+  const runScan = useCallback(async () => {
+    if (!imageUri) return;
+    await autoScan(imageUri);
+  }, [imageUri, autoScan]);
 
   const updateItem = useCallback((id: string, updates: Partial<ReceiptLineItem>) => {
     setItems((prev) =>
@@ -174,29 +196,16 @@ export default function ReceiptScanScreen() {
       >
         {!imageUri ? (
           <>
-            {isWeb ? (
-              <View style={[styles.webNotice, { backgroundColor: colors.surfaceVariant, borderColor: colors.border }]}>
-                <MaterialIcons name="info-outline" size={24} color={colors.primary} />
-                <Text style={[styles.webNoticeText, { color: colors.textSecondary }]}>
-                  Receipt scanning with itemization is available in the iOS and Android app. On web you can still attach a receipt image.
-                </Text>
-                <TouchableOpacity
-                  style={[styles.primaryBtn, { backgroundColor: colors.primary }]}
-                  onPress={() => pickImage(false)}
-                >
-                  <Text style={styles.primaryBtnText}>Choose receipt image</Text>
-                </TouchableOpacity>
+            <View style={styles.hero}>
+              <View style={[styles.heroIconWrap, { backgroundColor: colors.primaryLight }]}>
+                <MaterialIcons name="document-scanner" size={48} color={colors.primary} />
               </View>
-            ) : (
-              <View style={styles.hero}>
-                <View style={[styles.heroIconWrap, { backgroundColor: colors.primaryLight }]}>
-                  <MaterialIcons name="document-scanner" size={48} color={colors.primary} />
-                </View>
-                <Text style={[styles.heroTitle, { color: colors.text }]}>Scan a receipt</Text>
-                <Text style={[styles.heroSub, { color: colors.textSecondary }]}>
-                  We'll extract items and total so you can add the expense in one tap.
-                </Text>
-                <View style={styles.heroActions}>
+              <Text style={[styles.heroTitle, { color: colors.text }]}>Scan a receipt</Text>
+              <Text style={[styles.heroSub, { color: colors.textSecondary }]}>
+                We'll extract items and total instantly using AI.
+              </Text>
+              <View style={styles.heroActions}>
+                {!isWeb && (
                   <TouchableOpacity
                     style={[styles.primaryBtn, { backgroundColor: colors.primary }]}
                     onPress={() => pickImage(true)}
@@ -204,16 +213,16 @@ export default function ReceiptScanScreen() {
                     <MaterialIcons name="camera-alt" size={22} color="#FFF" />
                     <Text style={styles.primaryBtnText}>Take photo</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.secondaryBtn, { borderColor: colors.primary }]}
-                    onPress={() => pickImage(false)}
-                  >
-                    <MaterialIcons name="photo-library" size={22} color={colors.primary} />
-                    <Text style={[styles.secondaryBtnText, { color: colors.primary }]}>Choose from library</Text>
-                  </TouchableOpacity>
-                </View>
+                )}
+                <TouchableOpacity
+                  style={[isWeb ? styles.primaryBtn : styles.secondaryBtn, isWeb ? { backgroundColor: colors.primary } : { borderColor: colors.primary }]}
+                  onPress={() => pickImage(false)}
+                >
+                  <MaterialIcons name="photo-library" size={22} color={isWeb ? '#FFF' : colors.primary} />
+                  <Text style={[isWeb ? styles.primaryBtnText : styles.secondaryBtnText, !isWeb && { color: colors.primary }]}>Choose from library</Text>
+                </TouchableOpacity>
               </View>
-            )}
+            </View>
           </>
         ) : (
           <>
@@ -226,7 +235,7 @@ export default function ReceiptScanScreen() {
                 <Text style={styles.changePhotoText}>Change photo</Text>
               </TouchableOpacity>
               <Image source={{ uri: imageUri }} style={styles.previewImg} resizeMode="contain" />
-              {!isWeb && !result && (
+              {!result && (
                 <TouchableOpacity
                   style={[styles.scanOverlay, { backgroundColor: colors.overlay }]}
                   onPress={runScan}
@@ -240,15 +249,10 @@ export default function ReceiptScanScreen() {
                   ) : (
                     <View style={styles.scanOverlayContent}>
                       <MaterialIcons name="document-scanner" size={40} color="#FFF" />
-                      <Text style={styles.scanOverlayText}>Tap to extract items</Text>
+                      <Text style={styles.scanOverlayText}>Tap to re-scan</Text>
                     </View>
                   )}
                 </TouchableOpacity>
-              )}
-              {isWeb && (
-                <View style={[styles.scanOverlay, { backgroundColor: colors.overlay }]}>
-                  <Text style={styles.scanOverlayText}>Use “Use image only” below to attach to expense</Text>
-                </View>
               )}
             </View>
 
@@ -259,96 +263,96 @@ export default function ReceiptScanScreen() {
               </View>
             ) : null}
 
-            {(result || hasItems || isWeb) && imageUri && (
+            {(result || hasItems) && imageUri && (
               <>
-              <View style={[styles.section, { borderColor: colors.border }]}>
-                <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>Merchant / Description</Text>
-                <TextInput
-                  style={[styles.merchantInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.surface }]}
-                  placeholder="Store or expense name"
-                  placeholderTextColor={colors.textTertiary}
-                  value={merchant}
-                  onChangeText={setMerchant}
-                />
-              </View>
-
-              <View style={[styles.section, { borderColor: colors.border }]}>
-                <View style={styles.sectionRow}>
-                  <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>Line items</Text>
-                  {!isWeb && (
-                    <TouchableOpacity onPress={addItem} style={styles.addItemBtn}>
-                      <MaterialIcons name="add" size={20} color={colors.primary} />
-                      <Text style={[styles.addItemText, { color: colors.primary }]}>Add</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-                {items.length === 0 ? (
-                  <Text style={[styles.emptyItems, { color: colors.textTertiary }]}>No items extracted. Add manually or use total only.</Text>
-                ) : (
-                  items.map((item) => (
-                    <View key={item.id} style={[styles.itemRow, { borderBottomColor: colors.borderLight }]}>
-                      <TextInput
-                        style={[styles.itemDesc, { color: colors.text }]}
-                        placeholder="Description"
-                        placeholderTextColor={colors.textTertiary}
-                        value={item.description}
-                        onChangeText={(t) => updateItem(item.id, { description: t })}
-                      />
-                      <TextInput
-                        style={[styles.itemAmount, { color: colors.text }]}
-                        placeholder="0.00"
-                        placeholderTextColor={colors.textTertiary}
-                        value={item.amount ? String(item.amount) : ''}
-                        onChangeText={(t) => {
-                          const s = sanitizeDecimalInput(t);
-                          updateItem(item.id, { amount: parseFloat(s) || 0 });
-                        }}
-                        keyboardType="decimal-pad"
-                      />
-                      <TouchableOpacity onPress={() => removeItem(item.id)} hitSlop={8} style={styles.removeItemBtn}>
-                        <MaterialIcons name="close" size={18} color={colors.textTertiary} />
-                      </TouchableOpacity>
-                    </View>
-                  ))
-                )}
-              </View>
-
-              <View style={[styles.section, { borderColor: colors.border }]}>
-                <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>Total</Text>
-                <View style={[styles.totalRow, { borderBottomColor: colors.border }]}>
-                  <Text style={[styles.currencySign, { color: colors.text }]}>$</Text>
+                <View style={[styles.section, { borderColor: colors.border }]}>
+                  <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>Merchant / Description</Text>
                   <TextInput
-                    style={[styles.totalInput, { color: colors.text }]}
-                    placeholder="0.00"
+                    style={[styles.merchantInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.surface }]}
+                    placeholder="Store or expense name"
                     placeholderTextColor={colors.textTertiary}
-                    value={total}
-                    onChangeText={(t) => setTotal(sanitizeDecimalInput(t))}
-                    keyboardType="decimal-pad"
+                    value={merchant}
+                    onChangeText={setMerchant}
                   />
                 </View>
-                {items.length > 0 && (
-                  <Text style={[styles.totalHint, { color: colors.textTertiary }]}>
-                    Sum of items: ${computedTotal.toFixed(2)}
-                  </Text>
-                )}
-              </View>
 
-              <View style={styles.actions}>
-                <TouchableOpacity
-                  style={[styles.primaryBtn, styles.applyBtn, { backgroundColor: colors.primary }]}
-                  onPress={applyToExpense}
-                  disabled={!canApply}
-                >
-                  <MaterialIcons name="check" size={22} color="#FFF" />
-                  <Text style={styles.primaryBtnText}>Use for expense</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.secondaryBtn, { borderColor: colors.border }]}
-                  onPress={useImageOnly}
-                >
-                  <Text style={[styles.secondaryBtnText, { color: colors.textSecondary }]}>Use image only</Text>
-                </TouchableOpacity>
-              </View>
+                <View style={[styles.section, { borderColor: colors.border }]}>
+                  <View style={styles.sectionRow}>
+                    <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>Line items</Text>
+                    {!isWeb && (
+                      <TouchableOpacity onPress={addItem} style={styles.addItemBtn}>
+                        <MaterialIcons name="add" size={20} color={colors.primary} />
+                        <Text style={[styles.addItemText, { color: colors.primary }]}>Add</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                  {items.length === 0 ? (
+                    <Text style={[styles.emptyItems, { color: colors.textTertiary }]}>No items extracted. Add manually or use total only.</Text>
+                  ) : (
+                    items.map((item) => (
+                      <View key={item.id} style={[styles.itemRow, { borderBottomColor: colors.borderLight }]}>
+                        <TextInput
+                          style={[styles.itemDesc, { color: colors.text }]}
+                          placeholder="Description"
+                          placeholderTextColor={colors.textTertiary}
+                          value={item.description}
+                          onChangeText={(t) => updateItem(item.id, { description: t })}
+                        />
+                        <TextInput
+                          style={[styles.itemAmount, { color: colors.text }]}
+                          placeholder="0.00"
+                          placeholderTextColor={colors.textTertiary}
+                          value={item.amount ? String(item.amount) : ''}
+                          onChangeText={(t) => {
+                            const s = sanitizeDecimalInput(t);
+                            updateItem(item.id, { amount: parseFloat(s) || 0 });
+                          }}
+                          keyboardType="decimal-pad"
+                        />
+                        <TouchableOpacity onPress={() => removeItem(item.id)} hitSlop={8} style={styles.removeItemBtn}>
+                          <MaterialIcons name="close" size={18} color={colors.textTertiary} />
+                        </TouchableOpacity>
+                      </View>
+                    ))
+                  )}
+                </View>
+
+                <View style={[styles.section, { borderColor: colors.border }]}>
+                  <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>Total</Text>
+                  <View style={[styles.totalRow, { borderBottomColor: colors.border }]}>
+                    <Text style={[styles.currencySign, { color: colors.text }]}>$</Text>
+                    <TextInput
+                      style={[styles.totalInput, { color: colors.text }]}
+                      placeholder="0.00"
+                      placeholderTextColor={colors.textTertiary}
+                      value={total}
+                      onChangeText={(t) => setTotal(sanitizeDecimalInput(t))}
+                      keyboardType="decimal-pad"
+                    />
+                  </View>
+                  {items.length > 0 && (
+                    <Text style={[styles.totalHint, { color: colors.textTertiary }]}>
+                      Sum of items: ${computedTotal.toFixed(2)}
+                    </Text>
+                  )}
+                </View>
+
+                <View style={styles.actions}>
+                  <TouchableOpacity
+                    style={[styles.primaryBtn, styles.applyBtn, { backgroundColor: colors.primary }]}
+                    onPress={applyToExpense}
+                    disabled={!canApply}
+                  >
+                    <MaterialIcons name="check" size={22} color="#FFF" />
+                    <Text style={styles.primaryBtnText}>Use for expense</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.secondaryBtn, { borderColor: colors.border }]}
+                    onPress={useImageOnly}
+                  >
+                    <Text style={[styles.secondaryBtnText, { color: colors.textSecondary }]}>Use image only</Text>
+                  </TouchableOpacity>
+                </View>
               </>
             )}
           </>
